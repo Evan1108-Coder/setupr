@@ -2,6 +2,16 @@
 
 All notable changes to Setupr will be documented in this file. Setupr keeps a changelog because it is a versioned developer tool with user-facing CLI behavior.
 
+## 1.0.5
+
+### Changed
+- Improved the npm package presentation with a sharper package description, stronger search keywords, and a README opening focused on the main user problem: cloning an unfamiliar project and needing to know what it is, what is missing, and what to do next.
+- Added clearer "safe first run", "what Setupr checks", "what Setupr will not do without asking", and "why not just read the README" sections so npm visitors can understand the tool before installing it.
+- Moved the first-screen README emphasis from the full feature surface to the practical first commands: `setupr`, `setupr doctor`, `setupr env`, `setupr status`, and `setupr test quick`.
+
+### Validation
+- Prepared as a docs/metadata patch release for npm page polish.
+
 ## 1.0.4
 
 ### Changed

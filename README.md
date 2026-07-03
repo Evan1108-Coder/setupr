@@ -1,23 +1,51 @@
 # Setupr
 
-> **AI-powered project-control CLI.** Setupr detects your project's stack, plans setup, installs dependencies, configures environments, verifies local health, and keeps the project running — all from one terminal-native command.
+> **Terminal dashboard for unfamiliar projects.** Run Setupr after cloning a repo to detect the stack, env files, package scripts, git state, project health, and the next setup steps.
 
-![Status](https://img.shields.io/badge/status-stable-2563eb) ![License](https://img.shields.io/github/license/Evan1108-Coder/Setupr) ![Node](https://img.shields.io/badge/node-%3E%3D18-3c873a) ![npm](https://img.shields.io/badge/npm-%40evan--coder%2Fsetupr-cb3837)
+![Status](https://img.shields.io/badge/status-stable-2563eb) ![npm](https://img.shields.io/npm/v/%40evan-coder%2Fsetupr) ![License](https://img.shields.io/github/license/Evan1108-Coder/Setupr) ![Node](https://img.shields.io/badge/node-%3E%3D18-3c873a)
 
-**TypeScript CLI · stack detection · setup automation · project doctor · terminal dashboard · AI director**
+**Package:** `@evan-coder/setupr` · **Command:** `setupr` · **Legacy alias:** `setup`
 
 ---
 
-## ⚡ TL;DR — What you need to know
+```bash
+npx @evan-coder/setupr
+```
+
+![setupr status](docs/images/screenshot-status.png)
+
+## What Setupr Solves
+
+You cloned a repo. You do not know which package manager it expects, whether `.env` is complete, which script starts it, why it fails locally, or what needs to happen next. Setupr inspects the actual project on your machine and turns that uncertainty into a terminal dashboard, health report, and next actions.
+
+Use it when:
+
+- You cloned an unfamiliar project and need to know how to run it.
+- `.env` or `.env.example` is missing, stale, or incomplete.
+- You are unsure whether to use `npm`, `pnpm`, `yarn`, `bun`, Python, Go, Rust, Docker, or a monorepo command.
+- You want a quick project health check before onboarding, debugging, or handing work to someone else.
+
+## Safe First Run
+
+Setupr inspects first. Risky actions ask for confirmation. It will not delete files, overwrite `.env`, run destructive cleanups, publish, deploy, or use AI provider keys without an explicit command or confirmation.
+
+```bash
+npx @evan-coder/setupr --plain
+npx @evan-coder/setupr doctor
+```
+
+No API key is required. AI features are optional; Setupr works with deterministic scanning, heuristics, and cached local project state by default.
+
+## Quick Start
 
 | | |
 |---|---|
 | **Install** | `npm install -g @evan-coder/setupr` &nbsp;·&nbsp; or run instantly with `npx @evan-coder/setupr` |
 | **Commands** | `setupr` (the installed binary) — legacy alias `setup` |
-| **First run** | `cd your-project` → `setupr` → confirm the warning → the dashboard scans, plans, and sets up |
+| **First run** | `cd your-project` → `setupr` → inspect dashboard, env, scripts, health, and next actions |
 | **Full setup** | `setupr setup` — scan, install runtime + deps, configure `.env`, verify |
 | **Health check** | `setupr doctor` (environment) · `setupr health` (project) · `setupr status` (live dashboard) |
-| **AI (optional)** | `setupr auth login` — Setupr works fully without a key; AI only kicks in for novel situations |
+| **AI (optional)** | `setupr auth login` — Setupr works without a key; AI only kicks in for novel situations |
 | **CI / scripts** | add `--plain` (no TUI) and `--force` (skip safe prompts); `--json` for machine-readable output |
 | **Requires** | Node.js ≥ 18, a Unicode-capable terminal |
 
@@ -25,7 +53,7 @@
 
 **Who it's for:** developers who clone projects often and don't want to manually guess install commands, runtime versions, env files, ports, or verification steps.
 
-**Jump to:** [Install](#installation) · [Quick Start](#quick-start) · [Screenshots](#screenshots) · [Commands](#command-reference) · [Flags](#global-flags) · [Features](#features) · [AI Providers](#ai-providers) · [TUI Design](#tui-design--navigation) · [Safety](#safety-policy) · [Config](#configuration) · [Troubleshooting](#troubleshooting)
+**Jump to:** [Install](#installation) · [Commands](#first-commands) · [Example](#30-second-example) · [Screenshots](#screenshots) · [Safety](#what-setupr-will-not-do-without-asking) · [Features](#features) · [Full command reference](#command-reference) · [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -59,29 +87,54 @@ See [SETUP.md](SETUP.md) for the full setup guide, and [docs/project-snapshot.md
 
 ---
 
-## Quick Start
+## First Commands
 
 ```bash
 # Open the project dashboard / home screen
 setupr
 
-# Full project setup: scan, plan, install/configure, verify
-setupr setup
-
 # Diagnose your environment (runtimes, deps, ports, services)
 setupr doctor
 
-# Configure Setupr's AI once, globally (optional)
-setupr auth login
+# Open the .env editor / checker
+setupr env
 
-# Use fewer prompts while still stopping for serious blockers
-setupr setup --force
+# Show project state, git, env, processes, tests, and security summary
+setupr status
 
-# Plain terminal output for CI, SSH, or piping
-setupr setup --plain
+# Run quick verification using project-native scripts
+setupr test quick
 ```
 
-**First run walkthrough:** `cd` into any project → run `setupr` → Setupr prints a pre-execution warning and waits for Enter → the TUI launches, scans the project, plans setup steps and shows the agent's reasoning → it asks for missing env values or risky choices only when needed → confirms the final plan → executes → shows a completion summary. You can steer the agent at any time from the persistent input at the bottom (e.g. paste `KEY=value` lines, type `skip build`, or choose `Other...` to override a decision).
+Use `setupr setup` when you want Setupr to actually run setup steps. Use `--plain` for CI, SSH, or terminals where you do not want the TUI.
+
+## 30-second Example
+
+```bash
+git clone https://github.com/someone/project.git
+cd project
+npx @evan-coder/setupr
+```
+
+Expected result:
+
+- Detects language, framework, package manager, services, and monorepo shape.
+- Shows missing or incomplete `.env` values without printing secrets.
+- Finds likely start, build, test, lint, and health commands.
+- Shows git status, recent Setupr history, and managed processes.
+- Gives next actions before changing the project.
+
+## What It Checks
+
+Setupr checks package managers, runtime versions, package scripts, env templates, git state, Docker/Compose files, common services, dependency signals, test scripts, security basics, project notes/history, and terminal/TUI compatibility.
+
+## What Setupr Will Not Do Without Asking
+
+Setupr will not silently delete files, overwrite `.env`, run destructive cleanup, install unexpected packages, publish, deploy, use provider API keys, or execute critical shell actions. `--force` skips ordinary prompts, but it does not bypass critical safety blockers.
+
+## Why Not Just Read The README?
+
+READMEs can be incomplete or stale, and your local machine may not match the author's environment. Setupr reads the repo and checks the actual local state: installed tools, lockfiles, env files, package scripts, ports, git state, and setup history.
 
 ### Worked example: cloning a Next.js app on a fresh machine
 

@@ -1,7 +1,7 @@
 {
   "name": "@evan-coder/setupr",
-  "version": "1.0.4",
-  "description": "Intelligent project setup & management CLI. Auto-detects your stack, installs dependencies, configures environments, and keeps projects healthy.",
+  "version": "1.0.5",
+  "description": "Terminal dashboard for unfamiliar projects. Detect stack, env, scripts, health, and next setup steps.",
   "type": "module",
   "repository": {
     "type": "git",
@@ -41,9 +41,17 @@
   "keywords": [
     "project-setup",
     "cli",
+    "cli-tool",
+    "developer-tools",
     "devtools",
     "ai",
     "tui",
+    "terminal-dashboard",
+    "project-health",
+    "project-onboarding",
+    "local-dev",
+    "env-check",
+    "setup-doctor",
     "environment",
     "dependencies",
     "automation"
