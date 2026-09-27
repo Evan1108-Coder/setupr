@@ -82,8 +82,14 @@ npm test          # Run tests
 npm run typecheck # Type check
 npm run lint      # Lint source
 npm run build     # Build the npm package entrypoint
-npm run smoke:fixtures # Exercise representative CLI/TUI fixtures
+npm run smoke:fixtures # Exercise representative CLI fixtures
+npm run smoke:fixtures:tui # Include real pseudo-terminal doctor/env interactions (requires expect)
+npm run smoke:chaos # Run the real CLI across deliberately healthy and broken projects
+npm run fixtures:create -- ../Setupr-Testing/my-new-run # Keep reusable projects for manual testing
 ```
+
+See [Testing](docs/TESTING.md) for the fixture matrix, isolation rules, and verification limits.
+`npm pack` runs a fresh build through `prepack`; never publish an unverified or stale `dist/`.
 
 ## Code Style
 

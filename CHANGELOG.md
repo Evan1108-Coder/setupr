@@ -2,6 +2,31 @@
 
 All notable changes to Setupr will be documented in this file. Setupr keeps a changelog because it is a versioned developer tool with user-facing CLI behavior.
 
+## 1.0.6
+
+### Fixed
+- Validate manifest/config structure before scanning; parse workspace YAML, honor exclusions, deduplicate packages, and reject paths/symlinks outside the project.
+- Protect workspace creation from traversal and overwrites, quote script names, use the root package manager, and propagate failed or unmatched workspace operations.
+- Support multiple Git remotes with explicit selection; redact URL credentials, honor tracking/push configuration, and stop sync after failed pulls.
+- Preserve env comments, extra keys, blank values, quoted and multiline content. Use atomic saves with conflict detection and safe serialization.
+- Mask sensitive env diagnostics and prevent readline history/editing buffers from revealing earlier secret answers. Unresolved env fixes no longer report success.
+- Refresh Git, env, and file-tree context while retaining documentation caching; invalidate cached context when setup notes change.
+- Redact arbitrary credential fields and positional secret values from local command history.
+- Hide project-secret prompts and list values; preserve quoted/multiline import/export data, validate decrypted payloads, and reject unsafe export destinations.
+- Detect ordinary Python pyproject metadata and use `pip install .` for pyproject-only projects instead of a missing requirements file.
+- Harden terminal input against split mouse/paste/control sequences, Unicode editing errors, focus changes, and resize overflow.
+- Confirm managed-process startup before reporting success, retain early crash exit codes/logs, and stop the supervised child process tree during shutdown.
+- Preserve automatic and case-sensitive script targets across managed-process restarts.
+- Count all managed processes, recognize dependency-free manifests, and show unavailable health/security measurements as `N/A` instead of invented scores. JSON score/finding fields are `null` when unmeasured.
+
+### Added
+- `--remote <name>` for GitHub targets, Git PR/sync operations, and opening repositories; `--filter <package>` for workspace run/exec.
+- A reusable generator for 26 realistic/broken testing folders and a CLI matrix checking exits, structured output, file preservation, and process lifecycle behavior.
+- Fresh builds before packing/publishing, wider CI coverage, and testing documentation explaining what is and is not verified.
+
+### Maintenance
+- Updated vulnerable dependency versions and pinned the build toolchain to a patched esbuild release. No known npm audit advisories remain at validation time.
+
 ## 1.0.5
 
 ### Changed

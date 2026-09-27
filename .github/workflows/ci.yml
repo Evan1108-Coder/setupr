@@ -16,15 +16,17 @@ permissions:
 
 jobs:
   build-and-test:
-    name: Build & test (Node ${{ matrix.node }})
-    runs-on: ubuntu-latest
+    name: Build & test (${{ matrix.os }}, Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        # The dev/test toolchain (vitest 4 via rolldown) requires Node 20+
-        # (it imports `styleText` from node:util, added in Node 20). The published
-        # CLI bundle still targets Node 18, but CI builds and tests on 20/22.
-        node: ["20", "22"]
+        # The development toolchain requires Node 20.19+; the CLI targets Node 18.
+        os: [ubuntu-latest]
+        node: ["20", "22", "24"]
+        include:
+          - os: macos-latest
+            node: "22"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -50,3 +52,12 @@ jobs:
       # The test suite is fully offline (no live AI provider calls), so no API keys are needed.
       - name: Test
         run: npm test
+
+      - name: Real CLI fixture matrix
+        run: node scripts/smoke-chaos.mjs
+
+      - name: Package contents and lifecycle
+        run: npm pack --dry-run
+
+      - name: Production dependency audit
+        run: npm audit --omit=dev --audit-level=high

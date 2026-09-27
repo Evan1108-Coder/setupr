@@ -225,7 +225,8 @@ export function redactObject(value: unknown): unknown {
   return Object.fromEntries(
     Object.entries(value as Record<string, unknown>).map(([key, item]) => {
       if (/(key|token|secret|password|credential|auth)/i.test(key)) {
-        return [key, typeof item === "string" ? redactText(item) : "****"];
+        const redacted = typeof item === "string" ? redactText(item) : "****";
+        return [key, redacted === item ? "****" : redacted];
       }
       return [key, redactObject(item)];
     })
@@ -243,8 +244,12 @@ export function toJsonValue(value: unknown): JsonValue {
   ) as JsonValue;
 }
 
+export function redactCommandArguments(command: string, subcommand: string | undefined, args: string[]): string[] {
+  return args.map((value, index) => command === "secrets" && subcommand === "set" && index >= 1 ? "****" : redactText(value));
+}
+
 function formatCommandDisplay(command: string, subcommand?: string, args: string[] = []): string {
-  const parts = ["setupr", command === "dashboard" ? "" : command, subcommand, ...args]
+  const parts = ["setupr", command === "dashboard" ? "" : command, subcommand, ...redactCommandArguments(command, subcommand, args)]
     .filter((part): part is string => Boolean(part));
   return redactText(parts.join(" ").trim() || "setupr");
 }

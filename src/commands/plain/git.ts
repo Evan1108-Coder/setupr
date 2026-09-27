@@ -3,12 +3,14 @@ import { runCommand, runCommandArgs } from "../../executor/index.js";
 import { createSetuprError, printPlainError } from "../../errors/index.js";
 import { scanProject } from "../../scanner/index.js";
 import { loadConfig } from "../../state/config.js";
+import { readGitRemotes, redactGitOutput, selectGitRemote, type GitRemote } from "../../util/gitRemote.js";
 
 interface GitFlags {
   force?: boolean;
   args?: string[];
   message?: string;
   branch?: string;
+  remote?: string;
   [key: string]: unknown;
 }
 
@@ -35,7 +37,7 @@ export async function cmdGit(sub: string | undefined, cwd: string, flags: GitFla
     case "release": return gitRelease(cwd, flags);
     case "status": return gitStatus(cwd);
     case "log": return gitLog(cwd);
-    case "sync": return gitSync(cwd);
+    case "sync": return gitSync(cwd, flags);
     case "clean": return gitClean(cwd, flags);
     case "ignore": return gitIgnore(cwd, flags);
     case "changelog": return gitChangelog(cwd, flags);
@@ -296,9 +298,14 @@ async function gitPRDescription(cwd: string): Promise<void> {
   const branch = (await runCommand("git branch --show-current", cwd)).stdout.trim() || "current branch";
   const base = await detectMainBranch(cwd);
   const range = base ? `${base}...HEAD` : "HEAD";
-  const commits = (await runCommand(`git log --oneline ${range} 2>/dev/null || git log --oneline -10`, cwd)).stdout.trim().split("\n").filter(Boolean);
-  const stat = await runCommand(`git diff --stat ${range} 2>/dev/null || git diff --stat HEAD~1..HEAD`, cwd);
-  const files = (await runCommand(`git diff --name-only ${range} 2>/dev/null || git diff --name-only HEAD~1..HEAD`, cwd)).stdout.trim().split("\n").filter(Boolean);
+  let log = await runCommandArgs("git", ["log", "--oneline", range, "--"], cwd);
+  if (log.exitCode !== 0) log = await runCommandArgs("git", ["log", "--oneline", "-10", "--"], cwd);
+  const commits = log.stdout.trim().split("\n").filter(Boolean);
+  let stat = await runCommandArgs("git", ["diff", "--stat", range, "--"], cwd);
+  if (stat.exitCode !== 0) stat = await runCommandArgs("git", ["diff", "--stat", "HEAD~1..HEAD", "--"], cwd);
+  let names = await runCommandArgs("git", ["diff", "--name-only", range, "--"], cwd);
+  if (names.exitCode !== 0) names = await runCommandArgs("git", ["diff", "--name-only", "HEAD~1..HEAD", "--"], cwd);
+  const files = names.stdout.trim().split("\n").filter(Boolean);
 
   console.log(chalk.blue.bold("\n  PR Description Draft\n"));
   console.log(`## Summary`);
@@ -323,7 +330,7 @@ async function gitBranchCheck(cwd: string): Promise<void> {
   const branch = (await runCommand("git branch --show-current", cwd)).stdout.trim();
   const base = await detectMainBranch(cwd);
   const dirty = (await gitStatusPaths(cwd)).filter((file) => !isSetuprInternalPath(file));
-  const aheadBehind = base ? (await runCommand(`git rev-list --left-right --count ${base}...HEAD 2>/dev/null`, cwd)).stdout.trim() : "";
+  const aheadBehind = base ? (await runCommandArgs("git", ["rev-list", "--left-right", "--count", `${base}...HEAD`, "--"], cwd)).stdout.trim() : "";
   const [behind = "0", ahead = "0"] = aheadBehind.split(/\s+/);
 
   console.log(chalk.blue.bold("\n  Branch Strategy Check\n"));
@@ -441,39 +448,73 @@ async function gitPR(cwd: string, flags: GitFlags): Promise<void> {
     return;
   }
 
-  const ghCheck = await runCommand("gh --version", cwd);
+  const action = flags.args?.[0] || "create";
+  if (!["create", "list", "status"].includes(action)) {
+    printPlainError(createSetuprError({ code: "UNKNOWN_SUBCOMMAND", command: "git", subcommand: "pr", cwd, details: ["Valid PR actions: create, list, status."] }));
+    return;
+  }
+  const repoArgs: string[] = [];
+  if (flags.remote !== undefined) {
+    const remote = selectGitRemote(await readGitRemotes(cwd), flags.remote, { githubOnly: true });
+    if (!remote) {
+      printPlainError(createSetuprError({ code: "GIT_REMOTE_MISSING", command: "git", subcommand: "pr", cwd, details: ["The selected --remote must have a supported GitHub repository URL."] }));
+      return;
+    }
+    repoArgs.push("--repo", remote.githubRepo!);
+  }
+
+  const ghCheck = await runCommandArgs("gh", ["--version"], cwd);
   if (ghCheck.exitCode !== 0) {
+    if (action !== "create") {
+      printPlainError(createSetuprError({ code: "COMMAND_NOT_FOUND", command: "git", subcommand: "pr", cwd, details: ["GitHub CLI (gh) is required to list PRs or inspect their status. No push was attempted."] }));
+      return;
+    }
+    const branch = (await runCommandArgs("git", ["branch", "--show-current"], cwd)).stdout.trim();
+    if (!branch) {
+      printPlainError(createSetuprError({ code: "GIT_COMMAND_FAILED", command: "git", subcommand: "pr", cwd, details: ["Cannot push a PR from detached HEAD. Switch to a branch first."] }));
+      return;
+    }
+    const remote = await requirePushRemote(cwd, "pr", branch, flags.remote);
+    if (!remote) return;
+    if (!remote.githubRepo) {
+      printPlainError(createSetuprError({ code: "GIT_REMOTE_MISSING", command: "git", subcommand: "pr", cwd, details: ["The push destination is not a supported GitHub repository. Select a GitHub remote with --remote."] }));
+      return;
+    }
     console.log(chalk.yellow("GitHub CLI (gh) not installed. Install from https://cli.github.com"));
     console.log(chalk.dim("  Falling back to push + URL..."));
-    const branch = (await runCommand("git branch --show-current", cwd)).stdout.trim();
-    const pushResult = await runCommandArgs("git", ["push", "-u", "origin", branch], cwd);
+    const pushResult = await runCommandArgs("git", ["push", "-u", "--", remote.name, `HEAD:refs/heads/${branch}`], cwd);
     if (pushResult.exitCode === 0) {
-      const remote = (await runCommand("git remote get-url origin", cwd)).stdout.trim()
-        .replace(/\.git$/, "").replace("git@github.com:", "https://github.com/");
-      console.log(chalk.green(`✓ Pushed. Create PR at: ${remote}/compare/${branch}`));
+      console.log(chalk.green(`✓ Pushed. Create PR at: https://github.com/${remote.githubRepo}/compare/${encodeURIComponent(branch)}`));
     } else {
-      printPlainError(createSetuprError({ code: "GIT_PUSH_FAILED", command: "git", subcommand: "pr", cwd, details: [pushResult.stderr] }));
+      printPlainError(createSetuprError({ code: "GIT_PUSH_FAILED", command: "git", subcommand: "pr", cwd, details: [redactGitOutput(pushResult.stderr)] }));
     }
     return;
   }
 
-  const action = flags.args?.[0] || "create";
   if (action === "create") {
     const title = flags.args?.[1] || flags.message;
     const result = title
-      ? await runCommandArgs("gh", ["pr", "create", "--title", title, "--fill"], cwd)
-      : await runCommandArgs("gh", ["pr", "create", "--fill"], cwd);
+      ? await runCommandArgs("gh", ["pr", "create", ...repoArgs, "--title", title, "--fill"], cwd)
+      : await runCommandArgs("gh", ["pr", "create", ...repoArgs, "--fill"], cwd);
     if (result.exitCode === 0) {
-      console.log(chalk.green(`✓ PR created: ${result.stdout.trim()}`));
+      console.log(chalk.green(`✓ PR created: ${redactGitOutput(result.stdout.trim())}`));
     } else {
-      printPlainError(createSetuprError({ code: "GIT_COMMAND_FAILED", command: "git", subcommand: "pr", cwd, details: [result.stderr] }));
+      printPlainError(createSetuprError({ code: "GIT_COMMAND_FAILED", command: "git", subcommand: "pr", cwd, details: [redactGitOutput(result.stderr)] }));
     }
   } else if (action === "list") {
-    const result = await runCommand("gh pr list", cwd);
-    console.log(result.stdout || chalk.dim("No open PRs."));
+    const result = await runCommandArgs("gh", ["pr", "list", ...repoArgs], cwd);
+    if (result.exitCode !== 0) {
+      printPlainError(createSetuprError({ code: "GIT_COMMAND_FAILED", command: "git", subcommand: "pr", cwd, details: [redactGitOutput(result.stderr)] }));
+      return;
+    }
+    console.log(redactGitOutput(result.stdout) || chalk.dim("No open PRs."));
   } else if (action === "status") {
-    const result = await runCommand("gh pr status", cwd);
-    console.log(result.stdout);
+    const result = await runCommandArgs("gh", ["pr", "status", ...repoArgs], cwd);
+    if (result.exitCode !== 0) {
+      printPlainError(createSetuprError({ code: "GIT_COMMAND_FAILED", command: "git", subcommand: "pr", cwd, details: [redactGitOutput(result.stderr)] }));
+      return;
+    }
+    console.log(redactGitOutput(result.stdout));
   }
 }
 
@@ -735,32 +776,71 @@ async function gitLog(cwd: string): Promise<void> {
   console.log(result.stdout);
 }
 
-async function gitSync(cwd: string): Promise<void> {
+async function gitSync(cwd: string, flags: GitFlags): Promise<void> {
   if (!await isGitRepo(cwd)) {
     printPlainError(createSetuprError({ code: "GIT_NOT_A_REPO", command: "git", subcommand: "sync", cwd }));
     return;
   }
 
-  console.log(chalk.blue("Syncing with remote..."));
-
-  const pullResult = await runCommand("git pull --rebase", cwd);
-  if (pullResult.exitCode === 0) {
-    console.log(chalk.green("  ✓ Pulled latest changes"));
-  } else if (pullResult.stderr.includes("conflict")) {
-    printPlainError(createSetuprError({ code: "GIT_MERGE_CONFLICT", command: "git", subcommand: "sync", cwd, details: [pullResult.stderr] }));
+  const branch = (await runCommandArgs("git", ["branch", "--show-current"], cwd)).stdout.trim();
+  if (!branch) {
+    printPlainError(createSetuprError({ code: "GIT_COMMAND_FAILED", command: "git", subcommand: "sync", cwd, details: ["Cannot sync detached HEAD. Switch to a branch first."] }));
     return;
   }
+  // Tracking configuration can exist even before its remote-tracking ref is fetched.
+  const trackingRemote = await runCommandArgs("git", ["config", "--get", `branch.${branch}.remote`], cwd);
+  const trackingBranch = await runCommandArgs("git", ["config", "--get", `branch.${branch}.merge`], cwd);
+  const hasUpstream = trackingRemote.exitCode === 0 && Boolean(trackingRemote.stdout.trim())
+    && trackingBranch.exitCode === 0 && Boolean(trackingBranch.stdout.trim());
+  const needsRemote = flags.remote !== undefined || !hasUpstream;
+  const remote = needsRemote ? await requirePushRemote(cwd, "sync", branch, flags.remote) : null;
+  if (needsRemote && !remote) return;
 
-  const pushResult = await runCommand("git push", cwd);
-  if (pushResult.exitCode === 0) {
-    console.log(chalk.green("  ✓ Pushed local commits"));
-  } else if (pushResult.exitCode !== 0 && pushResult.stderr.includes("no upstream")) {
-    const branch = (await runCommand("git branch --show-current", cwd)).stdout.trim();
-    await runCommandArgs("git", ["push", "-u", "origin", branch], cwd);
-    console.log(chalk.green(`  ✓ Set upstream and pushed ${branch}`));
+  console.log(chalk.blue("Syncing with remote..."));
+  if (hasUpstream) {
+    const pullResult = await runCommandArgs("git", ["pull", "--rebase", ...(remote ? ["--", remote.name, branch] : [])], cwd);
+    if (pullResult.exitCode !== 0) {
+      printPlainError(createSetuprError({
+        code: /conflict/i.test(`${pullResult.stdout}\n${pullResult.stderr}`) ? "GIT_MERGE_CONFLICT" : "GIT_COMMAND_FAILED",
+        command: "git", subcommand: "sync", cwd, details: [redactGitOutput(pullResult.stderr || pullResult.stdout)],
+      }));
+      return;
+    }
+    console.log(chalk.green("  ✓ Pulled latest changes"));
   }
 
+  const pushResult = await runCommandArgs("git", ["push", ...(remote ? ["-u", "--", remote.name, `HEAD:refs/heads/${branch}`] : [])], cwd);
+  if (pushResult.exitCode !== 0) {
+    printPlainError(createSetuprError({ code: "GIT_PUSH_FAILED", command: "git", subcommand: "sync", cwd, details: [redactGitOutput(pushResult.stderr)] }));
+    return;
+  }
+  console.log(chalk.green(remote ? `  ✓ Set upstream and pushed ${branch} to ${remote.name}` : "  ✓ Pushed local commits"));
+
   console.log(chalk.green("\n✓ Synced"));
+}
+
+async function requirePushRemote(cwd: string, subcommand: string, branch: string, name?: string): Promise<GitRemote | null> {
+  const remotes = await readGitRemotes(cwd, { push: true });
+  let selectedName = name;
+  if (selectedName === undefined) {
+    for (const key of [`branch.${branch}.pushRemote`, "remote.pushDefault"]) {
+      const result = await runCommandArgs("git", ["config", "--get", key], cwd);
+      if (result.exitCode === 0) {
+        selectedName = result.stdout.trim();
+        break;
+      }
+    }
+    selectedName ??= remotes.find((remote) => remote.name === "origin")?.name ?? (remotes.length === 1 ? remotes[0].name : "");
+  }
+  const remote = selectGitRemote(remotes, selectedName);
+  if (!remote || remote.urls.length !== 1) {
+    printPlainError(createSetuprError({
+      code: "GIT_REMOTE_MISSING", command: "git", subcommand, cwd,
+      details: ["Select a configured push remote with --remote <name>. It must have exactly one push URL; multiple non-origin remotes require an explicit choice."],
+    }));
+    return null;
+  }
+  return remote;
 }
 
 async function gitClean(cwd: string, flags: GitFlags): Promise<void> {
@@ -1114,11 +1194,20 @@ async function gitUndo(cwd: string, flags: GitFlags): Promise<void> {
 }
 
 async function detectMainBranch(cwd: string): Promise<string | null> {
-  for (const candidate of ["main", "master", "trunk", "develop"]) {
-    const result = await runCommand(`git rev-parse --verify ${candidate} 2>/dev/null`, cwd);
-    if (result.exitCode === 0) return candidate;
-    const remote = await runCommand(`git rev-parse --verify origin/${candidate} 2>/dev/null`, cwd);
-    if (remote.exitCode === 0) return `origin/${candidate}`;
+  const candidates = ["main", "master", "trunk", "develop"];
+  const exists = async (ref: string) => (await runCommandArgs("git", ["rev-parse", "--verify", `${ref}^{commit}`], cwd)).exitCode === 0;
+  for (const candidate of candidates) {
+    const ref = `refs/heads/${candidate}`;
+    if (await exists(ref)) return ref;
+  }
+  for (const remote of await readGitRemotes(cwd)) {
+    const prefix = `refs/remotes/${remote.name}/`;
+    const head = (await runCommandArgs("git", ["symbolic-ref", "--quiet", `${prefix}HEAD`], cwd)).stdout.trim();
+    if (head.startsWith(prefix) && await exists(head)) return head;
+    for (const candidate of candidates) {
+      const ref = `${prefix}${candidate}`;
+      if (await exists(ref)) return ref;
+    }
   }
   return null;
 }

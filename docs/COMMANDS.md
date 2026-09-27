@@ -2,6 +2,11 @@
 
 Full reference of all Setupr CLI commands.
 
+`status --json` uses `null` for `health.score`, `security.score`, and
+`security.findings` when a security assessment is absent or unavailable. Do not
+interpret missing measurements as a perfect score or zero findings. Plain/TUI
+views show `N/A`; run `setupr security scan` to produce an assessment.
+
 ## TUI Commands (Rich Interactive UI)
 
 | Command | Description |
@@ -76,8 +81,34 @@ Full reference of all Setupr CLI commands.
 | `--all` | With `clean`, remove dependencies, build output, caches, and local env files |
 | `--json` | Emit machine-readable JSON where a command supports it (`status`, `ps`, `release`, `perf`, `github`, …) |
 | `--cwd <path>` | Run against another project directory; Setupr errors if the path does not exist or is not a directory |
+| `--remote <name>` | Select the remote for `github`, `git pr`, `git sync`, or `open repo`; unknown names fail instead of falling back |
+| `--filter <package>` | Filter `workspace run` and `workspace exec` by package name or relative path |
 
 Run `setupr help` for the full global option list, or `setupr help <command>` for a command's own flags and examples.
+
+### Multiple Remotes
+
+`setupr github` selects a GitHub `origin`, then GitHub `upstream`, then another GitHub remote in name order.
+GitLab/local remotes do not prevent finding an available GitHub upstream. `--remote` selects exactly
+one remote. GitHub commands recognize public `github.com` HTTPS, SSH, SCP-style URLs, and
+`ssh.github.com:443`; SSH aliases and GitHub Enterprise hosts are not inferred.
+
+`git sync` respects existing Git tracking and push configuration. An ambiguous first push requires
+an explicit remote. A failed pull prevents the push. Remote credentials are omitted from displayed
+URLs, history/context, and operation errors.
+
+### Workspace and Env Safety
+
+Workspace globs are deduplicated and exclusions are honored. Malformed configs, parent-directory
+patterns, and symlinks outside the project fail before workspace commands run. `workspace add`
+creates a new package; it never overwrites an existing directory, including with `--force`.
+`workspace run` uses the root package manager and reports failed or unmatched targets with a nonzero exit.
+
+`env sync` appends missing template keys without replacing existing values, intentional blanks,
+comments, multiline values, or extra variables. `env smart` masks sensitive values and saves only
+after unresolved issues have been addressed. Env updates reject conflicting concurrent edits,
+symlinks, and values that cannot be safely serialized. `env init --force` without a template
+does not erase an existing `.env`.
 
 ## TUI Navigation
 

@@ -63,7 +63,7 @@ async function plainStatus(cwd: string, fromDashboard = false, options: PlainOpt
   console.log(chalk.blue.bold(`\n  ${fromDashboard ? "Setupr Dashboard" : "Setupr Status"}\n`));
   console.log(`  Project:      ${chalk.white(status.projectName)}`);
   console.log(`  Directory:    ${chalk.dim(status.cwd)}`);
-  console.log(`  Health:       ${healthColor(status.health.label)(`${status.health.score}/100 ${status.health.label}`)}`);
+  console.log(`  Health:       ${healthColor(status.health.label)(status.health.score === null ? "N/A" : `${status.health.score}/100 ${status.health.label}`)}`);
   if (status.scanError) console.log(`  Scan:         ${chalk.red(status.scanError)}`);
   console.log(`  Stack:        ${chalk.white(formatStack(status))}`);
   console.log(`  Git:          ${formatGit(status)}`);
@@ -449,7 +449,7 @@ function formatEnv(status: Awaited<ReturnType<typeof collectDashboardStatus>>): 
 
 function formatDeps(status: Awaited<ReturnType<typeof collectDashboardStatus>>): string {
   const deps = status.dependencies;
-  if (deps.prod + deps.dev === 0) return chalk.yellow("none detected");
+  if (!deps.manifest) return chalk.yellow("none detected");
   return `${chalk.white(`${deps.prod} prod, ${deps.dev} dev`)} ${deps.lockfilePresent ? chalk.dim(deps.lockfile) : chalk.yellow("no lockfile")}`;
 }
 
@@ -460,7 +460,8 @@ function formatProcesses(status: Awaited<ReturnType<typeof collectDashboardStatu
   return chalk.green(`${processes.running}/${processes.managed} running`);
 }
 
-function securityText(score: number, findings: number): string {
+function securityText(score: number | null, findings: number | null): string {
+  if (score === null || findings === null) return chalk.dim("N/A (not assessed or unavailable)");
   const text = findings > 0 ? `${findings} finding(s), score ${score}` : `score ${score}`;
   if (score < 70) return chalk.red(text);
   if (findings > 0 || score < 90) return chalk.yellow(text);

@@ -180,6 +180,10 @@ Useful checks:
 
 ### `.env` was not created
 
+`env sync` preserves the existing file and appends missing template keys. It does not reorganize
+the file or replace deliberate empty values with template defaults. If the editor reports that
+values changed on disk, reload before saving so another editor's changes are preserved.
+
 Setupr creates `.env` from `.env.example` when a template is present. If `.env` already exists, `setupr env init` leaves it unchanged unless you pass:
 
 ```bash
@@ -245,4 +249,5 @@ Override detection with a `.setupr.json` file:
 - Run `setupr --help` for command reference
 - Run `setupr doctor` to diagnose environment issues
 - Run `npm run smoke:fixtures` from the repository before publishing or after large error/TUI/auth/env/command-execution changes
+- Run `npm run smoke:chaos` for the reusable multi-project CLI matrix; see [Testing](docs/TESTING.md)
 - File issues at: https://github.com/Evan1108-Coder/Setupr/issues

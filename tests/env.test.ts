@@ -87,14 +87,14 @@ describe("Environment helpers", () => {
     expect(merged.find((entry) => entry.key === "PORT")?.value).toBe("8080");
   });
 
-  it("sync preserves export-prefixed keys while using existing values", async () => {
+  it("sync preserves existing export-prefixed keys and values", async () => {
     await writeFile(join(tempDir, ".env.example"), "export API_KEY=\nNORMAL=example\n");
-    await writeFile(join(tempDir, ".env"), "API_KEY=secret\nNORMAL=real\n");
+    await writeFile(join(tempDir, ".env"), "export API_KEY=secret\nNORMAL=real\n");
     vi.spyOn(console, "log").mockImplementation(() => undefined);
 
     await runNonTUICommand("env", "sync", tempDir, {});
 
-    await expect(readFile(join(tempDir, ".env"), "utf-8")).resolves.toBe("export API_KEY=secret\nNORMAL=real\n\n");
+    await expect(readFile(join(tempDir, ".env"), "utf-8")).resolves.toBe("export API_KEY=secret\nNORMAL=real\n");
   });
 
   it("env smart does not write unresolved variables in non-interactive mode", async () => {
@@ -131,7 +131,7 @@ describe("Environment helpers", () => {
     expect(state.entries.find((entry) => entry.key === "API_KEY")?.sensitive).toBe(true);
   });
 
-  it("saves env editor entries while preserving template structure", async () => {
+  it("saves env editor entries while preserving existing structure and appending missing keys", async () => {
     await writeFile(join(tempDir, ".env.example"), "# Template\nexport API_KEY=\nPUBLIC_URL=http://localhost:3000\n");
     await writeFile(join(tempDir, ".env"), "API_KEY=old\nEXTRA_FLAG=yes\n");
     const state = await loadEnvEditorState(tempDir);
@@ -144,7 +144,7 @@ describe("Environment helpers", () => {
     await saveEnvEditorEntries(tempDir, entries);
 
     await expect(readFile(join(tempDir, ".env"), "utf-8")).resolves.toBe(
-      "# Template\nexport API_KEY=sk-new\nPUBLIC_URL=http://localhost:5173\nEXTRA_FLAG=two\\nlines\n"
+      "API_KEY=sk-new\nEXTRA_FLAG=\"two\\nlines\"\nPUBLIC_URL=http://localhost:5173\n"
     );
   });
 });

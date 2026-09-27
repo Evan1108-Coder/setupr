@@ -10,7 +10,7 @@ import { helpPathFromInput, isHelpRequest, showHelp } from "./help.js";
 import { createSetuprError, printPlainError } from "../errors/index.js";
 import { knownCommandNames, noSubcommandNames, tuiCommandNames } from "./commandRegistry.js";
 import { runSupervisorFromCli } from "../processes/manager.js";
-import { createProjectEngine, type ProjectEngine } from "../core/engine.js";
+import { createProjectEngine, redactCommandArguments, type ProjectEngine } from "../core/engine.js";
 import { fileExists, initEnvFile } from "../env/index.js";
 
 const cli = meow(
@@ -67,7 +67,7 @@ const cli = meow(
     format      Run or setup code formatting (run, check, setup)
 
   Options
-    --force     Skip all prompts
+    --force     Skip ordinary prompts; keep critical safeguards
     --all       Clean everything removable (clean only)
     --deps      Clean installed dependencies (clean only)
     --share     Clean sensitive local files for sharing (clean only)
@@ -120,6 +120,8 @@ const cli = meow(
       scope: { type: "string" },
       provider: { type: "string" },
       model: { type: "string" },
+      remote: { type: "string" },
+      filter: { type: "string" },
       timeout: { type: "number" },
       report: { type: "string" },
       url: { type: "string" },
@@ -426,7 +428,7 @@ async function recordCommandStart(engine: ProjectEngine, input: string[]): Promi
   await engine.recordCommand({
     type: "command.start",
     extra: {
-      args: input.map(maskArg),
+      args: [...input.slice(0, 2).map(maskArg), ...redactCommandArguments(input[0], input[1], input.slice(2)).map(maskArg)],
       mode: cli.flags.plain || cli.flags.noTui ? "plain" : cli.flags.tui ? "tui" : "auto",
     },
   });

@@ -1,6 +1,5 @@
-import { useEffect, useState } from "react";
-import { useInput } from "ink";
-import { parseSgrMouse } from "../terminalInput.js";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createTerminalControlInputStripper, useTerminalInput } from "../terminalInput.js";
 
 export interface FocusBounds {
   x: number;
@@ -27,61 +26,66 @@ interface UseFocusNavigationOptions {
 export type FocusState = "focused" | "ancestor" | undefined;
 
 export function useFocusNavigation({ items, initialId, onQuit }: UseFocusNavigationOptions) {
-  const fallbackId = items[0]?.id || "";
-  const [activeId, setActiveIdState] = useState(initialId || items[0]?.redirectTo || fallbackId);
-
+  const [requestedId, setActiveIdState] = useState(initialId || items[0]?.id || "");
+  const controlStripper = useMemo(() => createTerminalControlInputStripper(), []);
+  const tabItems = items.map((item) => resolveItem(items, item.id))
+    .filter((item, index, resolved): item is FocusItem => Boolean(item) && resolved.findIndex((other) => other?.id === item?.id) === index);
+  const activeId = (resolveItem(items, requestedId) || tabItems[0])?.id || "";
+  const activeIdRef = useRef(activeId);
   const activeIndex = Math.max(0, items.findIndex((item) => item.id === activeId));
-  const activeItem = items[activeIndex] || items[0];
+  const activeItem = items.find((item) => item.id === activeId);
 
   useEffect(() => {
-    if (items.length === 0) return;
-    if (!items.some((item) => item.id === activeId)) {
-      setActiveIdState(items[0].redirectTo || items[0].id);
-    }
-  }, [items, activeId]);
+    activeIdRef.current = activeId;
+    if (requestedId !== activeId) setActiveIdState(activeId);
+  }, [activeId, requestedId]);
 
   const setActiveId = (id: string) => {
-    const item = items.find((candidate) => candidate.id === id);
-    if (item) setActiveIdState(item.redirectTo || item.id);
+    const item = resolveItem(items, id);
+    if (item) {
+      activeIdRef.current = item.id;
+      setActiveIdState(item.id);
+    }
   };
 
   const setActivePanel = (index: number) => {
     const item = items[index];
-    if (item) setActiveIdState(item.id);
+    if (item) setActiveId(item.id);
   };
 
-  useInput((input, key) => {
+  useTerminalInput((input, key, raw) => {
+    const chunk = controlStripper.read(raw);
+    if (chunk.paste || (chunk.continuation && !chunk.mouse.length)) return;
     if (input === "\x03" || (key.ctrl && input === "c")) {
       onQuit?.();
       return;
     }
 
-    const mouse = parseSgrMouse(input);
-    if (mouse?.action === "press") {
+    for (const mouse of chunk.mouse) {
+      if (mouse.action !== "press" || (mouse.code & 3) !== 0 || chunk.text) continue;
       const hit = findMouseHit(items, mouse.x, mouse.y);
-      if (hit) {
-        setActiveIdState(hit.redirectTo || hit.id);
-        return;
-      }
+      if (hit) setActiveId(hit.id);
     }
+    if (chunk.mouse.length) return;
 
-    if (input === "q" && !key.ctrl && activeItem?.id !== "input") {
+    if (raw === "q" && chunk.text === "q" && activeIdRef.current !== "input") {
       onQuit?.();
       return;
     }
 
-	    if (key.tab) {
-	      const delta = key.shift ? -1 : 1;
-	      activateItem(items[(activeIndex + delta + items.length) % items.length]);
-	      return;
-	    }
-
-    if (activeItem?.id === "input" && (key.leftArrow || key.rightArrow || key.upArrow || key.downArrow)) {
+    if (key.tab && tabItems.length > 0) {
+      const index = Math.max(0, tabItems.findIndex((item) => item.id === activeIdRef.current));
+      const delta = key.shift ? -1 : 1;
+      activateItem(tabItems[(index + delta + tabItems.length) % tabItems.length]);
       return;
     }
 
-	    if (key.rightArrow) {
-	      move("right");
+    if (activeIdRef.current === "input" && (key.leftArrow || key.rightArrow || key.upArrow || key.downArrow)) {
+      return;
+    }
+
+    if (key.rightArrow) {
+      move("right");
       return;
     }
     if (key.leftArrow) {
@@ -98,15 +102,16 @@ export function useFocusNavigation({ items, initialId, onQuit }: UseFocusNavigat
   });
 
   const move = (direction: "left" | "right" | "up" | "down") => {
-    if (!activeItem || items.length === 0) return;
-    const origin = navigationOrigin(items, activeItem);
-    const next = findDirectionalFocusItem(items, origin, direction, uniqueIds([activeItem.id, origin.id, ...(activeItem.parentIds || [])]));
+    const current = resolveItem(items, activeIdRef.current);
+    if (!current) return;
+    const origin = navigationOrigin(items, current);
+    const next = findDirectionalFocusItem(items, origin, direction, uniqueIds([current.id, origin.id, ...(current.parentIds || [])]));
     activateItem(next);
   };
 
   const activateItem = (item: FocusItem | undefined) => {
     if (!item) return;
-    setActiveIdState(item.redirectTo || item.id);
+    setActiveId(item.id);
   };
 
   const isActive = (id: string) => activeId === id;
@@ -127,6 +132,17 @@ export function useFocusNavigation({ items, initialId, onQuit }: UseFocusNavigat
     setActiveId,
     setActivePanel,
   };
+}
+
+function resolveItem(items: FocusItem[], id: string): FocusItem | undefined {
+  const visited = new Set<string>();
+  let item = items.find((candidate) => candidate.id === id);
+  while (item?.redirectTo) {
+    if (visited.has(item.id)) return undefined;
+    visited.add(item.id);
+    item = items.find((candidate) => candidate.id === item!.redirectTo);
+  }
+  return item;
 }
 
 function navigationOrigin(items: FocusItem[], activeItem: FocusItem): FocusItem {

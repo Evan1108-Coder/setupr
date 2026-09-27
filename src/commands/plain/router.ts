@@ -1,10 +1,11 @@
 import chalk from "chalk";
 import { scanProject } from "../../scanner/index.js";
-import { runCommand } from "../../executor/index.js";
+import { runCommand, runCommandArgs } from "../../executor/index.js";
+import { readGitRemotes, selectGitRemote } from "../../util/gitRemote.js";
 import { existsSync } from "fs";
-import { readFile, writeFile } from "fs/promises";
+import { readFile } from "fs/promises";
 import { join } from "path";
-import { fileExists, initEnvFile, normalizeEnvKey, parseEnvKeys, parseEnvPairs } from "../../env/index.js";
+import { fileExists, initEnvFile, loadEnvEditorState, mergeEnvEditorValues, parseEnvKeys, parseEnvPairs, saveEnvEditorEntries } from "../../env/index.js";
 import { createSetuprError, printPlainError, classifyCommandFailure } from "../../errors/index.js";
 import { runProjectCommandOperation } from "../../core/operations.js";
 
@@ -102,7 +103,7 @@ export async function runNonTUICommand(
       await cmdDeploy(cwd);
       break;
     case "open":
-      await cmdOpen(sub, cwd);
+      await cmdOpen(sub, cwd, flags);
       break;
     case "git": {
       const { cmdGit } = await import("./git.js");
@@ -372,22 +373,10 @@ async function cmdEnv(sub: string | undefined, cwd: string, flags: Flags) {
     }
     case "sync": {
       try {
-        const example = await readFile(examplePath, "utf-8");
-        const env = await readFile(envPath, "utf-8").catch(() => "");
-        const currentPairs = parseEnvPairs(env);
-        let newContent = "";
-        for (const line of example.split("\n")) {
-          const rawKey = line.split("=")[0].trim();
-          const key = normalizeEnvKey(rawKey);
-          if (key && !key.startsWith("#") && currentPairs[key]) {
-            const prefix = rawKey.startsWith("export ") ? "export " : "";
-            newContent += `${prefix}${key}=${currentPairs[key]}\n`;
-          } else {
-            newContent += line + "\n";
-          }
-        }
-        await writeFile(envPath, newContent);
-        console.log(chalk.green("✓ Synced .env with .env.example structure"));
+        const state = await loadEnvEditorState(cwd);
+        if (!state.hasExample) throw new Error("Env sync requires .env.example; no files were changed.");
+        await saveEnvEditorEntries(cwd, state.entries);
+        console.log(chalk.green("✓ Synced missing .env.example entries while preserving existing .env data"));
       } catch (e) {
         printPlainError(createSetuprError({
           code: "ENV_SYNC_FAILED",
@@ -402,68 +391,38 @@ async function cmdEnv(sub: string | undefined, cwd: string, flags: Flags) {
     case "smart": {
       console.log(chalk.blue.bold("\n  🧠 Env Smart Analysis\n"));
       try {
-        const example = await readFile(examplePath, "utf-8");
-        const env = await readFile(envPath, "utf-8").catch(() => "");
-        const examplePairs = parseEnvPairs(example);
-        const currentPairs = parseEnvPairs(env);
-        const exampleKeys = parseEnvKeys(example);
-        const currentKeys = parseEnvKeys(env);
-
-        const missing: string[] = [];
-        const empty: string[] = [];
-        const invalid: string[] = [];
-        const extra: string[] = [];
-        const changed: string[] = [];
-
-        for (const key of exampleKeys) {
-          if (!currentKeys.includes(key)) {
-            missing.push(key);
-          } else if (!currentPairs[key] || currentPairs[key].trim() === "" || currentPairs[key] === '""' || currentPairs[key] === "''") {
-            empty.push(key);
-          } else {
-            const val = currentPairs[key];
-            if (isLikelyInvalid(key, val)) {
-              invalid.push(key);
-            }
-          }
+        const state = await loadEnvEditorState(cwd);
+        if (!state.hasExample) {
+          throw Object.assign(new Error("Smart analysis needs .env.example to compare expected values."), { code: "ENOENT" });
         }
-
-        for (const key of currentKeys) {
-          if (!exampleKeys.includes(key)) {
-            extra.push(key);
-          }
-        }
-
-        const exampleDefaultPairs = parseEnvPairs(example);
-        for (const key of exampleKeys) {
-          if (currentPairs[key] && exampleDefaultPairs[key] && currentPairs[key] !== exampleDefaultPairs[key] && exampleDefaultPairs[key].trim() !== "") {
-            changed.push(key);
-          }
-        }
-
-        let issues = 0;
+        const byKey = new Map(state.entries.map((entry) => [entry.key, entry]));
+        const required = state.entries.filter((entry) => entry.fromTemplate);
+        const currentPairs = Object.fromEntries(state.entries.filter((entry) => entry.fromEnv).map((entry) => [entry.key, entry.value]));
+        const displayValue = (key: string, value: string) => byKey.get(key)?.sensitive ? "[hidden]" : JSON.stringify(value).slice(1, -1);
+        const missing = required.filter((entry) => !entry.fromEnv).map((entry) => entry.key);
+        const empty = required.filter((entry) => entry.fromEnv && !entry.value.trim()).map((entry) => entry.key);
+        const invalid = required.filter((entry) => entry.fromEnv && entry.value.trim() && isLikelyInvalid(entry.key, entry.value)).map((entry) => entry.key);
+        const changed = required.filter((entry) => entry.fromEnv && entry.templateValue?.trim() && entry.value !== entry.templateValue).map((entry) => entry.key);
+        const extra = state.extra;
 
         if (missing.length > 0) {
-          issues += missing.length;
           console.log(chalk.red(`  ✗ Missing (${missing.length}):`));
           missing.forEach((k) => {
-            const defaultVal = examplePairs[k];
-            console.log(chalk.dim(`    ${k}`) + (defaultVal ? chalk.dim(` (default: ${defaultVal})`) : chalk.yellow(" — needs value")));
+            const defaultVal = byKey.get(k)?.templateValue;
+            console.log(chalk.dim(`    ${k}`) + (defaultVal ? chalk.dim(` (default: ${displayValue(k, defaultVal)})`) : chalk.yellow(" — needs value")));
           });
           console.log("");
         }
 
         if (empty.length > 0) {
-          issues += empty.length;
           console.log(chalk.yellow(`  ⚠ Empty/placeholder values (${empty.length}):`));
-          empty.forEach((k) => console.log(chalk.dim(`    ${k}=${currentPairs[k] || ""}`)));
+          empty.forEach((k) => console.log(chalk.dim(`    ${k}=${displayValue(k, currentPairs[k])}`)));
           console.log("");
         }
 
         if (invalid.length > 0) {
-          issues += invalid.length;
           console.log(chalk.yellow(`  ⚠ Possibly invalid (${invalid.length}):`));
-          invalid.forEach((k) => console.log(chalk.dim(`    ${k}=${currentPairs[k]}`) + chalk.yellow(` — ${getInvalidReason(k, currentPairs[k])}`)));
+          invalid.forEach((k) => console.log(chalk.dim(`    ${k}=${displayValue(k, currentPairs[k])}`) + chalk.yellow(` — ${getInvalidReason(k, currentPairs[k])}`)));
           console.log("");
         }
 
@@ -475,7 +434,7 @@ async function cmdEnv(sub: string | undefined, cwd: string, flags: Flags) {
 
         if (changed.length > 0) {
           console.log(chalk.cyan(`  ℹ Customized from defaults (${changed.length}):`));
-          changed.forEach((k) => console.log(chalk.dim(`    ${k}: ${exampleDefaultPairs[k]} → ${currentPairs[k]}`)));
+          changed.forEach((k) => console.log(chalk.dim(`    ${k}: ${displayValue(k, byKey.get(k)?.templateValue || "")} → ${displayValue(k, currentPairs[k])}`)));
           console.log("");
         }
 
@@ -486,67 +445,63 @@ async function cmdEnv(sub: string | undefined, cwd: string, flags: Flags) {
           console.log(chalk.dim("  Enter values for issues below (press Enter to skip):\n"));
 
           const { createInterface } = await import("readline");
-          const rl = createInterface({ input: process.stdin, output: process.stdout });
-          const ask = (q: string): Promise<string> => new Promise((r) => rl.question(q, r));
+          const { Writable } = await import("stream");
+          const ask = (question: string, sensitive: boolean): Promise<string> => new Promise((resolve, reject) => {
+            // Each value gets fresh history and editing buffers so secrets cannot be recalled later.
+            const output = new Writable({
+              write(chunk, _encoding, callback) {
+                if (!sensitive) process.stdout.write(chunk);
+                callback();
+              },
+            });
+            const rl = createInterface({ input: process.stdin, output, terminal: true, historySize: 0 });
+            const onClose = () => {
+              output.end();
+              reject(new Error("Env input cancelled. No changes were saved."));
+            };
+            rl.on("SIGINT", () => rl.close());
+            rl.once("close", onClose);
+            if (sensitive) process.stdout.write(question);
+            rl.question(sensitive ? "" : question, (answer) => {
+              rl.off("close", onClose);
+              rl.close();
+              output.end();
+              if (sensitive) process.stdout.write("\n");
+              resolve(answer);
+            });
+          });
 
           for (const key of needsInput) {
-            const current = currentPairs[key] || examplePairs[key] || "";
-            const hint = current ? chalk.dim(` [${current}]`) : "";
+            const current = currentPairs[key] || byKey.get(key)?.templateValue || "";
+            const hint = current ? chalk.dim(byKey.get(key)?.sensitive ? " [hidden]" : ` [${displayValue(key, current)}]`) : "";
             const reason = invalid.includes(key) ? chalk.yellow(` (${getInvalidReason(key, currentPairs[key] || "")})`) : "";
-            const answer = await ask(`  ${chalk.white(key)}${hint}${reason}: `);
-            if (answer.trim()) {
-              currentPairs[key] = answer.trim();
-            } else if (!currentPairs[key] && examplePairs[key]) {
-              currentPairs[key] = examplePairs[key];
-            }
+            const answer = await ask(`  ${chalk.white(key)}${hint}${reason}: `, Boolean(byKey.get(key)?.sensitive));
+            if (answer !== "") currentPairs[key] = answer;
           }
-          rl.close();
           console.log("");
-        } else if (issues === 0) {
-          console.log(chalk.green("  ✓ All environment variables look good!"));
-          if (extra.length > 0) {
-            console.log(chalk.dim(`    (${extra.length} extra vars present, not in .env.example)`));
-          }
-        } else {
+        }
+        const unresolved = required.filter(({ key }) => !Object.hasOwn(currentPairs, key) || !currentPairs[key].trim() || isLikelyInvalid(key, currentPairs[key]));
+        if (unresolved.length > 0) {
           printPlainError(createSetuprError({
             code: "ENV_SMART_FAILED",
             command: "env",
             subcommand: "smart",
             cwd,
-            details: [`${issues} issue${issues > 1 ? "s" : ""} found. Run interactively in a TTY to fix, or manually edit .env.`],
+            details: [`Unresolved variables: ${unresolved.map((entry) => entry.key).join(", ")}. No changes were saved.`, "Run interactively in a TTY to fix, or manually edit .env."],
             canContinue: false,
           }));
           return;
         }
 
-        // Write reorganized .env
-        let output = "";
-        for (const line of example.split("\n")) {
-          if (!line.trim() || line.startsWith("#")) {
-            output += line + "\n";
-            continue;
-          }
-          const rawKey = line.split("=")[0].trim();
-          const key = normalizeEnvKey(rawKey);
-          if (currentPairs[key]) {
-            const prefix = rawKey.startsWith("export ") ? "export " : "";
-            output += `${prefix}${key}=${currentPairs[key]}\n`;
-          } else {
-            output += line + "\n";
-          }
-        }
-        for (const key of extra) {
-          output += `${key}=${currentPairs[key]}\n`;
-        }
-        await writeFile(envPath, output);
-        console.log(chalk.green("  ✓ Saved .env (reorganized, matched .env.example order)"));
+        await saveEnvEditorEntries(cwd, mergeEnvEditorValues(state.entries, currentPairs));
+        console.log(chalk.green("  ✓ Saved .env; all required variables are filled and passed basic validation"));
       } catch (err) {
         printPlainError(createSetuprError({
-          code: envReadErrorCode(err),
+          code: (err as NodeJS.ErrnoException).code === "ENOENT" ? "ENV_TEMPLATE_MISSING" : "ENV_SMART_FAILED",
           command: "env",
           subcommand: "smart",
           cwd,
-          details: ["Smart analysis needs .env.example so it can compare expected values to current values."],
+          details: [err instanceof Error ? err.message : "Could not safely update .env."],
         }));
       }
       break;
@@ -1466,14 +1421,21 @@ async function cmdDeploy(cwd: string) {
   }
 }
 
-async function cmdOpen(target: string | undefined, cwd: string) {
+async function cmdOpen(target: string | undefined, cwd: string, flags: Flags) {
   const openCmd = process.platform === "darwin" ? "open" : "xdg-open";
   switch (target) {
     case "repo": {
-      const result = await runCommand("git remote get-url origin 2>/dev/null", cwd);
-      const url = result.stdout.trim().replace(/\.git$/, "").replace("git@github.com:", "https://github.com/");
-      if (url) {
-        await runCommand(`${openCmd} ${url}`, cwd);
+      const remote = selectGitRemote(await readGitRemotes(cwd), typeof flags.remote === "string" ? flags.remote : undefined);
+      let url = remote?.githubRepo ? `https://github.com/${remote.githubRepo}` : remote?.url;
+      if (url && !url.includes("://")) url = url.replace(/^([^/:]+):(.+)$/, "https://$1/$2");
+      if (url?.startsWith("ssh://")) url = url.replace(/^ssh:\/\//, "https://");
+      if (url && /^https?:\/\//.test(url)) {
+        url = url.replace(/\.git\/?$/, "");
+        const result = await runCommandArgs(openCmd, [url], cwd);
+        if (result.exitCode !== 0) {
+          printPlainError(createSetuprError({ code: "COMMAND_FAILED", command: "open", subcommand: "repo", cwd, details: ["The browser opener failed."] }));
+          return;
+        }
         console.log(chalk.green(`Opened: ${url}`));
       } else {
         printPlainError(createSetuprError({
@@ -1481,7 +1443,7 @@ async function cmdOpen(target: string | undefined, cwd: string) {
           command: "open",
           subcommand: "repo",
           cwd,
-          details: ["No git remote origin was found."],
+          details: ["No web repository URL was found for the selected remote."],
         }));
       }
       break;

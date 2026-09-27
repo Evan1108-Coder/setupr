@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -11,13 +11,20 @@ const keep = process.argv.includes("--keep");
 const includeTui = process.argv.includes("--tui");
 const temp = mkdtempSync(join(tmpdir(), "setupr-smoke-"));
 const results = [];
+const errorCases = new Set([
+  "malformed package", "malformed setupr config", "missing env template", "bare env missing template",
+  "bare env missing file", "bad env smart", "corrupt auth storage", "missing build script", "failing test script",
+  "invalid --cwd rejected", "missing package arg", "non-numeric port rejected",
+  "out-of-range port rejected", "no project setup", "no project update", "forced non-tty tui",
+  "missing remote",
+]);
 
 function main() {
   createFixtures();
   plainSmoke();
   if (includeTui) tuiSmoke();
   report();
-  if (!keep) rmSync(temp, { recursive: true, force: true });
+  if (!keep && !results.some(result => !result.ok)) rmSync(temp, { recursive: true, force: true });
 }
 
 function createFixtures() {
@@ -130,7 +137,7 @@ function plainSmoke() {
   expectRun("bare env missing template", "env-missing", ["env", "--plain"], ["ENV_TEMPLATE_MISSING"]);
   expectRun("forced empty env", "env-missing", ["env", "init", "--plain", "--force"], ["Created empty .env"]);
   expectRun("bare env missing file", "js-new", ["env", "--plain"], ["ENV_FILE_MISSING"]);
-  expectRun("bad env smart", "env-bad", ["env", "smart", "--plain"], ["ENV_SMART_FAILED", "4 issues"]);
+  expectRun("bad env smart", "env-bad", ["env", "smart", "--plain"], ["ENV_SMART_FAILED", "Unresolved variables:", "No changes were saved"]);
   expectRun("corrupt auth storage", "no-project", ["auth", "status", "--plain"], ["AUTH_STORAGE_INVALID"], {
     env: { HOME: join(temp, "corrupt-home") },
   });
@@ -162,7 +169,7 @@ function plainSmoke() {
   expectNoFile("git shell injection blocked", "git-safe", ["git", "branch", "create", `bad; touch ${join(temp, "git-pwned")} #`, "--plain"], join(temp, "git-pwned"));
   expectRun("agent context next app", "next-app", ["status", "--plain", "--json"], ["Next.js", "NEXT_PUBLIC_BASE_URL"]);
   expectRun("agent context vite app", "vite-app", ["status", "--plain"], ["Vite", "npm", "AI:"]);
-  expectRun("agent context django app", "django-app", ["doctor", "--plain"], ["Setupr Doctor", "AI Director Diagnosis"]);
+  expectRun("agent context django app", "django-app", ["doctor", "--plain"], ["Setupr Doctor", "AI Director Diagnosis"], { expectedExitCode: [0, 1] });
   expectRun("agent context fastapi app", "fastapi-app", ["info", "--plain"], ["Python", "FastAPI"]);
   expectRun("agent context rust app", "rust-app", ["info", "--plain"], ["Rust"]);
   expectRun("agent context go app", "go-app", ["info", "--plain"], ["Go"]);
@@ -192,11 +199,13 @@ function tuiSmoke() {
     "stty rows 24 columns 100",
     "expect {",
     "  -re \"Press Enter\" { send \"\\r\" }",
-    "  timeout { send \"\\r\" }",
+    "  timeout { send \"\\003\"; exit 1 }",
+    "  eof { exit 1 }",
     "}",
     "expect {",
     "  -re \"(setupr doctor|Setupr Doctor|DIAGNOSTICS|ENVIRONMENT)\" {}",
-    "  timeout {}",
+    "  timeout { send \"\\003\"; exit 1 }",
+    "  eof { exit 1 }",
     "}",
 	    "after 1000",
 	    "send \"\\003\"",
@@ -205,10 +214,11 @@ function tuiSmoke() {
   ].join("\n"));
   const result = spawnSync("expect", [expectFile, process.execPath, cli, join(temp, "tui-empty")], {
     encoding: "utf8",
-    timeout: 12_000,
+    env: { ...cleanSmokeEnv(), TERM: "xterm-256color" },
+    timeout: 25_000,
   });
   const output = `${result.stdout || ""}\n${result.stderr || ""}`;
-  const ok = output.includes("Setupr Doctor") || output.includes("Diagnostics") || output.includes("Environment");
+  const ok = result.status === 0 && !result.error && !result.signal && /Setupr Doctor|Diagnostics|Environment|DIAGNOSTICS/.test(output);
 	  if (ok) {
 	    results.push({ name: "tui doctor capture", ok: true, details: "captured TUI launch text" });
 	  } else {
@@ -229,9 +239,19 @@ function tuiSmoke() {
     "set env(COLUMNS) 100",
     "set env(LINES) 28",
     "spawn $node $cli env --force",
-    "after 2500",
-    "send \"API_KEY=smoke-value\\r\"",
-    "after 1500",
+    "expect {",
+    "  -re \"No variables yet\" {}",
+    "  timeout { send \"\\003\"; exit 1 }",
+    "  eof { exit 1 }",
+    "}",
+    "send -- \"API_KEY=smoke-value\"",
+    "after 100",
+    "send -- \"\\r\"",
+    "expect {",
+    "  -re \"Saved 1 environment value|saved\" {}",
+    "  timeout { send \"\\003\"; exit 1 }",
+    "  eof { exit 1 }",
+    "}",
     "send \"\\003\"",
     "after 500",
     "send \"\\003\"",
@@ -240,15 +260,16 @@ function tuiSmoke() {
   ].join("\n"));
   const envResult = spawnSync("expect", [envExpectFile, process.execPath, cli, join(temp, "env-tui-force")], {
     encoding: "utf8",
-    timeout: 12_000,
+    env: { ...cleanSmokeEnv(), TERM: "xterm-256color" },
+    timeout: 25_000,
   });
   const envOutput = `${envResult.stdout || ""}\n${envResult.stderr || ""}`;
   const envFile = join(temp, "env-tui-force", ".env");
-  const envOk = fileExists(envFile) && /setupr env|Setupr Env|VARIABLES|ENV FILE/i.test(envOutput) && envResult.status === 0;
+  const envOk = fileExists(envFile) && readFileSync(envFile, "utf8").includes("API_KEY=smoke-value") && /setupr env|Setupr Env|VARIABLES|ENV FILE/i.test(envOutput) && envResult.status === 0;
   results.push({
     name: "tui env editor capture",
     ok: envOk,
-    details: envOk ? "opened editor and created .env" : `env editor did not complete\n${trim(envOutput)}`,
+    details: envOk ? "opened editor and saved the typed value" : `env editor did not save the typed value\n${trim(envOutput)}`,
   });
 }
 
@@ -256,12 +277,15 @@ function expectRun(name, fixture, args, expected, options = {}) {
   const result = run(fixture, args, options);
   const output = result.stdout + result.stderr;
   const missing = expected.filter((item) => !output.includes(item));
+  const expectedExit = options.expectedExitCode ?? (errorCases.has(name) ? 1 : 0);
+  const exitMatches = Array.isArray(expectedExit) ? expectedExit.includes(result.status) : result.status === expectedExit;
+  const ok = missing.length === 0 && exitMatches && !result.error && !result.signal;
   results.push({
     name,
-    ok: missing.length === 0,
-    details: missing.length === 0
+    ok,
+    details: ok
       ? expected.join(", ")
-      : `missing ${missing.join(", ")}\n${trim(output)}`,
+      : `exit ${result.status} (expected ${expectedExit}); missing ${missing.join(", ")}\n${trim(output)}`,
   });
 }
 
@@ -269,7 +293,7 @@ function expectNoFile(name, fixture, args, forbiddenPath, options = {}) {
   const result = run(fixture, args, options);
   results.push({
     name,
-    ok: !fileExists(forbiddenPath),
+    ok: !fileExists(forbiddenPath) && result.status === 1 && !result.error && !result.signal && !`${result.stdout}${result.stderr}`.includes("MODULE_NOT_FOUND"),
     details: fileExists(forbiddenPath)
       ? `forbidden marker was created\n${trim(result.stdout + result.stderr)}`
       : "marker not created",
@@ -282,7 +306,7 @@ function expectProcessLifecycle() {
   const stop = run("process-lifecycle", ["stop", "all", "--force"], { timeout: 10_000 });
   const psAfter = run("process-lifecycle", ["ps", "--plain"], { timeout: 10_000 });
   const output = [start, psBefore, stop, psAfter].map((result) => result.stdout + result.stderr).join("\n");
-  const ok = output.includes("Started dev") && output.includes("running") && output.includes("Stopped dev") && output.includes("stopped");
+  const ok = [start, psBefore, stop, psAfter].every(result => result.status === 0 && !result.error && !result.signal) && output.includes("Started dev") && output.includes("running") && output.includes("Stopped dev") && output.includes("stopped");
   results.push({
     name: "process lifecycle start ps stop-all",
     ok,
@@ -302,20 +326,24 @@ function run(fixture, args, options = {}) {
 function cleanSmokeEnv() {
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
-    if (/^(OPENAI|ANTHROPIC|GOOGLE|GROQ|MINIMAX|MOONSHOT|GITHUB_MODELS|GITHUB_TOKEN|GH_TOKEN|SETUPR_AI|AI)_/i.test(key)) {
+    if (/^(OPENAI|ANTHROPIC|GOOGLE|GROQ|MINIMAX|MOONSHOT|GITHUB|GH_|SETUPR_AI|P_SETUP|AI_)/i.test(key)) {
       delete env[key];
     }
   }
   const home = join(temp, "smoke-home");
   mkdirSync(home, { recursive: true });
   env.HOME = home;
+  env.XDG_CONFIG_HOME = join(home, ".config");
+  env.GIT_CONFIG_NOSYSTEM = "1";
+  env.GIT_CONFIG_GLOBAL = "/dev/null";
+  env.GIT_TERMINAL_PROMPT = "0";
   env.SETUPR_SMOKE = "1";
   return env;
 }
 
 function report() {
   console.log(`\nSetupr fixture smoke`);
-  console.log(`Fixtures: ${temp}${keep ? "" : " (will be removed)"}`);
+  console.log(`Fixtures: ${temp}${keep || results.some(result => !result.ok) ? " (retained)" : " (will be removed)"}`);
   let failed = 0;
   for (const result of results) {
     const marker = result.ok ? "✓" : "✗";

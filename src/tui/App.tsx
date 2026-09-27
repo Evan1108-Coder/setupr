@@ -17,6 +17,7 @@ import { executeAllSteps } from "../executor/index.js";
 import { hasProjectSignals } from "./projectSignals.js";
 import { getProviderEnvValue } from "../ai/models.js";
 import { fromUnknownError, errorSummary } from "../errors/index.js";
+import { parseEnvKeys, parseEnvPairs } from "../env/index.js";
 import { deleteCheckpoint, formatCheckpointAge, loadCheckpoint } from "../state/checkpoint.js";
 import { loadAgentWorkflowCheckpoint, saveAgentWorkflowCheckpoint } from "../agent/workflowCheckpoint.js";
 import { analyzeEnvTemplate, createPostSetupSummary, formatEnvInsights } from "../agent/runtime.js";
@@ -524,31 +525,22 @@ async function populateKeyDeps(cwd: string, store: AppStore) {
   } catch {}
 }
 
-async function populateEnvVars(cwd: string, store: AppStore) {
+export async function populateEnvVars(cwd: string, store: AppStore) {
   try {
     const { readFile } = await import("fs/promises");
     const { join } = await import("path");
     const example = await readFile(join(cwd, ".env.example"), "utf-8");
-    const requiredKeys = example
-      .split("\n")
-      .filter((l) => l.trim() && !l.startsWith("#"))
-      .map((l) => l.split("=")[0].trim())
-      .filter(Boolean);
+    const requiredKeys = parseEnvKeys(example);
 
-    const currentVars: Record<string, string> = {};
+    let currentVars: Record<string, string> = {};
     try {
       const env = await readFile(join(cwd, ".env"), "utf-8");
-      for (const line of env.split("\n")) {
-        if (line.trim() && !line.startsWith("#")) {
-          const [k, ...rest] = line.split("=");
-          if (k) currentVars[k.trim()] = rest.join("=").trim();
-        }
-      }
+      currentVars = parseEnvPairs(env);
     } catch {}
 
     const envVars = requiredKeys.map((key) => ({
       key,
-      value: currentVars[key] || "",
+      value: currentVars[key] || process.env[key] || "",
       status: (currentVars[key] ? "auto" : process.env[key] ? "auto" : "pending") as "auto" | "pending",
       source: currentVars[key] ? ".env" : process.env[key] ? "system" : undefined,
     }));

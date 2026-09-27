@@ -20,6 +20,8 @@ secrets.local.json
 .DS_Store
 coverage/
 .setupr/
+/test-projects/
+/test-artifacts/
 
 # Local visual smoke-test artifacts
 tui-screenshots/

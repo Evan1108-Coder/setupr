@@ -5,6 +5,52 @@ import { createTerminalControlInputStripper, parseSgrMouse, stripTerminalControl
 const esc = "\x1b";
 
 describe("terminal control input handling", () => {
+  it("preserves pasted text with guards split at every byte boundary", () => {
+    const paste = `${esc}[200~\u65e5\u672c\u{1f389}\r\nsecond${esc}[201~`;
+    for (let split = 1; split < paste.length; split++) {
+      const consumer = createTerminalControlInputStripper();
+      expect(consumer.strip(paste.slice(0, split)) + consumer.strip(paste.slice(split))).toBe("\u65e5\u672c\u{1f389}\nsecond");
+    }
+  });
+
+  it("recovers after a very long terminated control without retaining its payload", () => {
+    const consumer = createTerminalControlInputStripper();
+    expect(consumer.strip(`${esc}]0;${"x".repeat(100000)}`)).toBe("");
+    expect(consumer.strip(`${esc}\\visible`)).toBe("visible");
+    expect(consumer.strip(`${esc}[${"1;".repeat(100000)}mvisible`)).toBe("visible");
+  });
+
+  it.each([
+    `${esc}[<0;78;17M`, `${esc}[M !#`, `${esc}]0;title${esc}\\`,
+    `${esc}]0;title\x07`, `${esc}[31m`,
+  ])("strips %j at every chunk boundary without eating following text", (sequence) => {
+    for (let split = 1; split < sequence.length; split++) {
+      const consumer = createTerminalControlInputStripper();
+      const result = consumer.strip(`before${sequence.slice(0, split)}`)
+        + consumer.strip(`${sequence.slice(split)}123after`);
+      expect(result, `split at ${split}`).toBe("before123after");
+    }
+  });
+
+  it("does not consume digits typed after an interrupted mouse report", () => {
+    const consumer = createTerminalControlInputStripper();
+    expect(consumer.strip(`${esc}[<0;`)).toBe("");
+    expect(consumer.strip("hello")).toBe("hello");
+    expect(consumer.strip("123")).toBe("123");
+  });
+
+  it("does not replay a complete bare paste marker as a prefix of the next value", () => {
+    const consumer = createTerminalControlInputStripper();
+    expect(consumer.strip("[200~")).toBe("");
+    expect(consumer.strip("value[201~")).toBe("value");
+    expect(consumer.strip("[200]=literal")).toBe("[200]=literal");
+  });
+
+  it("normalizes CRLF even when the pair is split between reads", () => {
+    const consumer = createTerminalControlInputStripper();
+    expect(consumer.strip("a\r") + consumer.strip("\nb")).toBe("a\nb");
+  });
+
   it("strips complete SGR mouse reports before text input sees them", () => {
     const noisy = `${esc}[<0;78;17Mhello[<64;121;35M world${esc}[<0;78;17m`;
 

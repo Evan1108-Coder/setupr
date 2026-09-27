@@ -53,6 +53,12 @@ export async function detectPackageManager(cwd: string): Promise<string | null> 
     await access(join(cwd, "requirements.txt"));
     return "pip";
   } catch {}
+  try {
+    const pyproject = await readFile(join(cwd, "pyproject.toml"), "utf-8");
+    // Do not infer an installable package from tool-only configuration or string contents.
+    const simpleMetadata = pyproject.split(/"""|'''/, 1)[0];
+    if (/^\s*\[(?:project|build-system)\]\s*(?:#.*)?$/m.test(simpleMetadata)) return "pip";
+  } catch {}
 
   // Other
   try {

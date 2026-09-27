@@ -105,7 +105,7 @@ const HELP_NODES: Record<string, HelpNode> = {
       { name: "(no subcommand)", summary: "Open the interactive .env editor TUI. Creates .env from .env.example after confirmation when needed." },
       { name: "init", summary: "Create .env from .env.example. Without .env.example, requires --force to create empty .env." },
       { name: "check", summary: "Report missing values required by .env.example." },
-      { name: "sync", summary: "Reorder/update .env structure from .env.example while preserving values." },
+      { name: "sync", summary: "Add missing template keys while preserving existing values, comments, and extra keys." },
       { name: "smart", summary: "Analyze missing, empty, invalid, extra, and changed env values." },
     ],
     options: [
@@ -172,6 +172,7 @@ const HELP_NODES: Record<string, HelpNode> = {
     ],
     options: [
       { name: "--force", summary: "Skip ordinary confirmations where the git command supports it." },
+      { name: "--remote <name>", summary: "Choose a remote for git pr or git sync; unknown names fail without fallback." },
     ],
     examples: ["setupr git status", "setupr git commit-message", "setupr git pr-description", "setupr git conflicts"],
   },
@@ -250,11 +251,12 @@ const HELP_NODES: Record<string, HelpNode> = {
       { name: "list", summary: "List workspace packages." },
       { name: "run", summary: "Run a script across workspaces." },
       { name: "exec", summary: "Execute a command across workspaces." },
-      { name: "add", summary: "Add a dependency to a workspace." },
+      { name: "add", summary: "Create a new package directory within the workspace; existing directories are never overwritten." },
       { name: "info", summary: "Show workspace metadata." },
       { name: "check", summary: "Check workspace consistency." },
     ],
-    examples: ["setupr workspace list", "setupr workspace run test", "setupr workspace check"],
+    options: [{ name: "--filter <package>", summary: "Run/exec only packages whose name or relative path matches this text." }],
+    examples: ["setupr workspace list", "setupr workspace run test --filter @app/api", "setupr workspace check"],
   },
 	  health: {
 	    name: "health",

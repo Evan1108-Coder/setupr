@@ -94,7 +94,7 @@ export function planStepsHeuristic(scan: ScanResult, context?: ProjectContext): 
 
   // Install dependencies
   if (scan.packageManager) {
-    const installCmd = getInstallCommand(scan.packageManager);
+    const installCmd = getInstallCommand(scan.packageManager, scan.configFiles);
     steps.push({
       id: "deps",
       label: `Install dependencies (${scan.packageManager})`,
@@ -179,13 +179,15 @@ export function planStepsHeuristic(scan: ScanResult, context?: ProjectContext): 
   return steps;
 }
 
-function getInstallCommand(pm: string): string {
+function getInstallCommand(pm: string, configFiles: string[]): string {
   const cmds: Record<string, string> = {
     npm: "npm install",
     yarn: "yarn install",
     pnpm: "pnpm install",
     bun: "bun install",
-    pip: "pip install -r requirements.txt",
+    pip: configFiles.includes("pyproject.toml") && !configFiles.includes("requirements.txt")
+      ? "pip install ."
+      : "pip install -r requirements.txt",
     pipenv: "pipenv install",
     poetry: "poetry install",
     cargo: "cargo build",

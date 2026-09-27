@@ -9,6 +9,7 @@ import { scanProject } from "../../scanner/index.js";
 import { collectContext } from "../../context/collector.js";
 import { collectDashboardStatus } from "../../status/collector.js";
 import { shellQuote } from "../../util/shell.js";
+import { readGitRemotes, selectGitRemote } from "../../util/gitRemote.js";
 
 interface ProductFlags {
   args?: string[];
@@ -16,6 +17,7 @@ interface ProductFlags {
   yes?: boolean;
   force?: boolean;
   report?: string;
+  remote?: string;
 }
 
 export async function cmdFix(sub: string | undefined, cwd: string, flags: ProductFlags = {}): Promise<void> {
@@ -137,10 +139,12 @@ export async function cmdPerf(sub: string | undefined, cwd: string, flags: Produ
 
 export async function cmdGithub(sub: string | undefined, cwd: string, flags: ProductFlags = {}): Promise<void> {
   const mode = sub || "status";
-  const remote = (await runCommand("git remote get-url origin 2>/dev/null || true", cwd)).stdout.trim();
-  const repo = parseGitHubRepo(remote);
+  const remotes = await readGitRemotes(cwd);
+  const remote = selectGitRemote(remotes, flags.remote, { githubOnly: true });
+  const repo = remote?.githubRepo || null;
   const data = {
-    remote,
+    remote: remote?.url || "",
+    remoteName: remote?.name || null,
     repo,
     url: repo ? `https://github.com/${repo}` : null,
     actions: repo ? `https://github.com/${repo}/actions` : null,
@@ -149,6 +153,7 @@ export async function cmdGithub(sub: string | undefined, cwd: string, flags: Pro
   };
   if (flags.json) {
     console.log(JSON.stringify(data, null, 2));
+    if (!repo) process.exitCode = 1;
     return;
   }
   console.log(chalk.blue.bold(`\n  GitHub ${mode}\n`));
@@ -158,11 +163,14 @@ export async function cmdGithub(sub: string | undefined, cwd: string, flags: Pro
       command: "github",
       subcommand: mode,
       cwd,
-      details: ["No GitHub origin remote was detected."],
+      details: [flags.remote === undefined
+        ? "No configured remote has a supported GitHub repository URL."
+        : "The selected --remote does not exist or does not have a supported GitHub repository URL."],
     }));
     return;
   }
   console.log(`  Repo:    ${repo}`);
+  console.log(`  Remote:  ${remote!.name}`);
   console.log(`  Actions: ${data.actions}`);
   console.log(`  PRs:     ${data.pulls}`);
   console.log(`  Issues:  ${data.issues}`);
@@ -248,12 +256,4 @@ async function readPackage(cwd: string): Promise<{ name?: string; version?: stri
   } catch {
     return null;
   }
-}
-
-function parseGitHubRepo(remote: string): string | null {
-  if (!remote) return null;
-  const ssh = remote.match(/github\.com[:/]([^/]+\/[^/.]+)(?:\.git)?$/);
-  if (ssh) return ssh[1];
-  const https = remote.match(/github\.com\/([^/]+\/[^/.]+)(?:\.git)?$/);
-  return https?.[1] || null;
 }

@@ -12,7 +12,7 @@
 npx @evan-coder/setupr
 ```
 
-![setupr status](docs/images/screenshot-status.png)
+![setupr status](https://raw.githubusercontent.com/Evan1108-Coder/Setupr/master/docs/images/screenshot-status.png)
 
 ## What Setupr Solves
 
@@ -35,6 +35,11 @@ npx @evan-coder/setupr doctor
 ```
 
 No API key is required. AI features are optional; Setupr works with deterministic scanning, heuristics, and cached local project state by default.
+
+Multiple Git remotes and workspaces are supported. Use `setupr github status --remote upstream`
+to select a GitHub repository, or `setupr workspace run test --filter @app/api` to target a package.
+Workspace discovery honors exclusions and rejects paths outside the project. `setupr env sync`
+adds missing template keys while preserving your existing values, comments, and extra variables.
 
 ## Quick Start
 
@@ -80,7 +85,7 @@ setup             # legacy alias (identical)
 
 **Requirements**
 
-- Node.js **≥ 18.0.0** for the published CLI (Node 20+ recommended for repo development/CI)
+- Node.js **≥ 18.0.0** for the published CLI (Node 20.19+ or a supported newer release for repo development/CI)
 - A terminal with Unicode support for TUI mode
 
 See [SETUP.md](SETUP.md) for the full setup guide, and [docs/project-snapshot.md](docs/project-snapshot.md) for the current repository/maintenance snapshot.
@@ -175,55 +180,55 @@ Real output captured from the Setupr CLI (`@evan-coder/setupr`) running against 
 
 **`setupr status` — project health, git, env, processes, and recent history at a glance:**
 
-![setupr status](docs/images/screenshot-status.png)
+![setupr status](https://raw.githubusercontent.com/Evan1108-Coder/Setupr/master/docs/images/screenshot-status.png)
 
 **`setupr status --json` — machine-readable output for CI/CD and scripting:**
 
-![setupr status --json](docs/images/screenshot-json.png)
+![setupr status --json](https://raw.githubusercontent.com/Evan1108-Coder/Setupr/master/docs/images/screenshot-json.png)
 
 ### Diagnostics & health
 
 **`setupr doctor` — runtime, package-manager, and AI-director environment diagnosis:**
 
-![setupr doctor](docs/images/screenshot-doctor.png)
+![setupr doctor](https://raw.githubusercontent.com/Evan1108-Coder/Setupr/master/docs/images/screenshot-doctor.png)
 
 **`setupr health` — full project health check with a pass/warn/fail score:**
 
-![setupr health](docs/images/screenshot-health.png)
+![setupr health](https://raw.githubusercontent.com/Evan1108-Coder/Setupr/master/docs/images/screenshot-health.png)
 
 **`setupr env check` — environment validation with a clear, structured error path:**
 
-![setupr env check](docs/images/screenshot-envcheck.png)
+![setupr env check](https://raw.githubusercontent.com/Evan1108-Coder/Setupr/master/docs/images/screenshot-envcheck.png)
 
 ### Project intelligence
 
 **`setupr info` — at-a-glance project summary (language, framework, PM, runtime, deps):**
 
-![setupr info](docs/images/screenshot-info.png)
+![setupr info](https://raw.githubusercontent.com/Evan1108-Coder/Setupr/master/docs/images/screenshot-info.png)
 
 **`setupr deps list` — full dependency tree from the detected package manager:**
 
-![setupr deps list](docs/images/screenshot-deps.png)
+![setupr deps list](https://raw.githubusercontent.com/Evan1108-Coder/Setupr/master/docs/images/screenshot-deps.png)
 
 ### Verification, release & performance
 
 **`setupr test list` — discovered verification suites with pass/warn/fail status:**
 
-![setupr test list](docs/images/screenshot-testlist.png)
+![setupr test list](https://raw.githubusercontent.com/Evan1108-Coder/Setupr/master/docs/images/screenshot-testlist.png)
 
 **`setupr release check` — release-readiness gate (package, README, LICENSE, dist, git):**
 
-![setupr release check](docs/images/screenshot-release.png)
+![setupr release check](https://raw.githubusercontent.com/Evan1108-Coder/Setupr/master/docs/images/screenshot-release.png)
 
 **`setupr perf startup` — scan/context/status performance timings:**
 
-![setupr perf startup](docs/images/screenshot-perf.png)
+![setupr perf startup](https://raw.githubusercontent.com/Evan1108-Coder/Setupr/master/docs/images/screenshot-perf.png)
 
 ### The full command index
 
 **`setupr --help` — every command and global option, in one screen:**
 
-![setupr --help](docs/images/screenshot-help.png)
+![setupr --help](https://raw.githubusercontent.com/Evan1108-Coder/Setupr/master/docs/images/screenshot-help.png)
 
 > All Setupr TUIs share one terminal-native visual grammar — see [TUI Design & Navigation](#tui-design--navigation) for the full design system and keyboard map.
 
@@ -231,15 +236,15 @@ Real output captured from the Setupr CLI (`@evan-coder/setupr`) running against 
 
 ## Architecture
 
-![Architecture](docs/images/architecture.jpg)
+![Architecture](https://raw.githubusercontent.com/Evan1108-Coder/Setupr/master/docs/images/architecture.jpg)
 
 *Stack detection, AI-powered planning, guided TUI setup, and project health monitoring in one CLI.*
 
 These visuals are generated from the actual repository structure and project workflow, not placeholders:
 
-![Repository file mix](docs/assets/repo-file-mix.svg)
+![Repository file mix](https://raw.githubusercontent.com/Evan1108-Coder/Setupr/master/docs/assets/repo-file-mix.svg)
 
-![Project workflow](docs/assets/workflow.svg)
+![Project workflow](https://raw.githubusercontent.com/Evan1108-Coder/Setupr/master/docs/assets/workflow.svg)
 
 ### What happens on a run
 

@@ -36,6 +36,13 @@ export async function detectRuntime(
     if (pkg.engines?.node) return { name: "node", version: pkg.engines.node };
   } catch {}
 
+  for (const file of ["pyproject.toml", "requirements.txt", "Pipfile", "poetry.lock", "setup.py", "setup.cfg"]) {
+    try {
+      await access(join(cwd, file));
+      return { name: "python", version: null };
+    } catch {}
+  }
+
   return null;
 }
 
@@ -76,16 +83,32 @@ async function detectPythonVersion(cwd: string): Promise<string | null> {
 
   try {
     const pyproject = await readFile(join(cwd, "pyproject.toml"), "utf-8");
-    const match = pyproject.match(/python\s*=\s*"([^"]+)"/);
-    if (match) return match[1];
-  } catch {}
-
-  try {
-    await access(join(cwd, "requirements.txt"));
-    return null; // Python detected but version unknown
+    return readPythonConstraint(pyproject);
   } catch {}
 
   return null;
+}
+
+function readPythonConstraint(content: string): string | null {
+  // Only inspect simple one-line fields before any multiline TOML string.
+  // This deliberately does not decode escapes or attempt full TOML parsing.
+  const lines = content.split(/"""|'''/, 1)[0].split(/\r?\n/);
+  let section = "";
+  let poetryVersion: string | null = null;
+  for (const line of lines) {
+    const table = line.match(/^\s*\[([\w.-]+)\]\s*(?:#.*)?$/);
+    if (table) {
+      section = table[1];
+      continue;
+    }
+    if (line.trimStart().startsWith("[")) section = "";
+    const field = line.match(/^\s*(requires-python|python)\s*=\s*(?:"([^"\\]*)"|'([^']*)')\s*(?:#.*)?$/);
+    if (!field) continue;
+    const value = (field[2] ?? field[3]).trim();
+    if (section === "project" && field[1] === "requires-python") return value || null;
+    if (section === "tool.poetry.dependencies" && field[1] === "python") poetryVersion = value || null;
+  }
+  return poetryVersion;
 }
 
 async function detectGoVersion(cwd: string): Promise<string | null> {

@@ -1,5 +1,8 @@
-const ESC = String.fromCharCode(27);
-const BEL = String.fromCharCode(7);
+import { useEffect, useRef } from "react";
+import { useInput, useStdin, type Key } from "ink";
+
+const ESC = "\x1b";
+const BEL = "\x07";
 
 export interface SgrMouseReport {
   code: number;
@@ -9,132 +12,151 @@ export interface SgrMouseReport {
   action: "press" | "release" | "scroll" | "move";
 }
 
-const SGR_MOUSE_PATTERN = "\\[<\\d+;\\d+;\\d+[mM]";
-const PARTIAL_SGR_MOUSE_PATTERN = "\\[<\\d*(?:;\\d*){0,2}$";
-interface TerminalControlInputStripper {
-  strip: (value: string) => string;
+interface TerminalInputChunk {
+  text: string;
+  mouse: SgrMouseReport[];
+  paste: boolean;
+  continuation: boolean;
+}
+
+// Ink 5 removes ESC prefixes and Home/End names before useInput runs. Capture
+// the same input event first so consumers can also inspect its original bytes.
+export function useTerminalInput(handler: (input: string, key: Key, raw: string) => void) {
+  const { internal_eventEmitter } = useStdin();
+  const raw = useRef("");
+  useEffect(() => {
+    const capture = (data: string) => { raw.current = String(data); };
+    internal_eventEmitter.prependListener("input", capture);
+    return () => { internal_eventEmitter.removeListener("input", capture); };
+  }, [internal_eventEmitter]);
+  useInput((input, key) => handler(input, key, raw.current));
+}
+
+export function createTerminalControlInputStripper() {
+  let mode: "text" | "escape" | "csi" | "osc" | "string" | "string-escape" | "ss3" | "x10" = "text";
+  let control = "";
+  let bare = false;
+  let stringMode: "osc" | "string" = "osc";
+  let remainingMouseBytes = 0;
+  let inPaste = false;
+  let previousCR = false;
+
+  const read = (value: string): TerminalInputChunk => {
+    const continuedEscape = mode === "escape";
+    const result: TerminalInputChunk = { text: "", mouse: [], paste: inPaste, continuation: mode !== "text" };
+    const append = (char: string) => {
+      if (char === "\n" && previousCR) {
+        previousCR = false;
+        return;
+      }
+      previousCR = char === "\r";
+      if (previousCR) result.text += "\n";
+      else {
+        const code = char.charCodeAt(0);
+        if (char === "\n" || char === "\t" || (code >= 32 && (code < 127 || code > 159))) result.text += char;
+      }
+    };
+
+    for (let index = 0; index < value.length; index++) {
+      const char = value[index];
+      if (mode === "x10") {
+        if (--remainingMouseBytes === 0) mode = "text";
+        continue;
+      }
+      if (mode === "osc" || mode === "string") {
+        if (char === BEL && mode === "osc") mode = "text";
+        else if (char === ESC) {
+          stringMode = mode;
+          mode = "string-escape";
+        }
+        continue;
+      }
+      if (mode === "string-escape") {
+        mode = char === "\\" || (char === BEL && stringMode === "osc") ? "text" : char === ESC ? "string-escape" : stringMode;
+        continue;
+      }
+      if (mode === "escape") {
+        mode = "text";
+        if (char === "[") { mode = "csi"; control = ""; bare = false; }
+        else if (char === "]") mode = "osc";
+        else if (char === "P" || char === "^" || char === "_") mode = "string";
+        else if (char === "O") mode = "ss3";
+        else if (char === ESC) mode = "escape";
+        else if (continuedEscape && index === 0) {
+          result.continuation = false;
+          index--;
+        }
+        continue;
+      }
+      if (mode === "ss3") {
+        mode = char === ESC ? "escape" : "text";
+        continue;
+      }
+      if (mode === "csi") {
+        if (char === ESC) { mode = "escape"; continue; }
+        // An interrupted mouse report must not consume unrelated digits later.
+        if (control.startsWith("<") && !/[\d;mM]/.test(char)) {
+          mode = "text";
+          index--;
+          continue;
+        }
+        if (/[\x40-\x7e]/.test(char)) {
+          mode = "text";
+          const sequence = `[${control}${char}`;
+          if (control === "" && char === "M" && !bare) {
+            mode = "x10";
+            remainingMouseBytes = 3;
+          } else if (sequence === "[200~" || sequence === "[201~") {
+            inPaste = sequence === "[200~";
+            result.paste = true;
+          } else {
+            const mouse = parseSgrMouse(sequence);
+            if (mouse) result.mouse.push(mouse);
+            else if (bare && !control.startsWith("<")) for (const literal of sequence) append(literal);
+          }
+        } else if (/[\x20-\x3f]/.test(char)) {
+          // Bound buffering even for an unterminated or malicious CSI stream.
+          if (control.length < 128) control += char;
+        } else {
+          mode = "text";
+          index--;
+        }
+        continue;
+      }
+      if (char === ESC) {
+        mode = "escape";
+      } else if (char === "[" && /^(?:<|20)/.test(value.slice(index + 1))) {
+        // Compatibility for callers still using Ink's ESC-stripped input.
+        // A lone '[' remains ordinary text rather than delaying normal typing.
+        mode = "csi";
+        control = "";
+        bare = true;
+      } else {
+        append(char);
+      }
+    }
+    return result;
+  };
+
+  return { read, strip: (value: string) => read(value).text };
 }
 
 const defaultStripper = createTerminalControlInputStripper();
-
-export function createTerminalControlInputStripper(): TerminalControlInputStripper {
-  let pendingMouseContinuation = false;
-  let pendingControlContinuation = "";
-
-  return {
-    strip(value: string): string {
-      let input = `${pendingControlContinuation}${value}`;
-      pendingControlContinuation = "";
-
-      if (pendingMouseContinuation) {
-        const continuation = input.match(/^\d*(?:;\d*){0,2}[mM]?/);
-        if (continuation?.[0]) {
-          input = input.slice(continuation[0].length);
-        }
-        pendingMouseContinuation = !/[mM]/.test(continuation?.[0] || "");
-      }
-
-      if (new RegExp(`${escapeRegExp(ESC)}?${PARTIAL_SGR_MOUSE_PATTERN}`).test(input)) {
-        pendingMouseContinuation = true;
-      }
-
-      const partial = findPartialTerminalControl(input);
-      if (partial) {
-        pendingControlContinuation = partial.sequence;
-        input = input.slice(0, partial.index);
-      }
-
-      const stripped = input
-        .replace(new RegExp(`${escapeRegExp(ESC)}${SGR_MOUSE_PATTERN}`, "g"), "")
-        .replace(new RegExp(SGR_MOUSE_PATTERN, "g"), "")
-        // Bracketed-paste guards. Ink's keypress parser frequently consumes the
-        // leading ESC of a pasted chunk, so the markers can arrive as either
-        // `\x1b[200~`/`\x1b[201~` or the bare `[200~`/`[201~`. Strip both forms so
-        // a Cmd+V paste does not leak literal "[200~"/"[201~" into the field.
-        .replace(new RegExp(`${escapeRegExp(ESC)}?\\[20[01]~`, "g"), "")
-        .replace(new RegExp(`${escapeRegExp(ESC)}\\[[0-?]*[ -/]*[@-~]`, "g"), "")
-        .replace(new RegExp(`${escapeRegExp(ESC)}\\][^${escapeRegExp(BEL)}]*(?:${escapeRegExp(BEL)}|${escapeRegExp(ESC)}\\\\)`, "g"), "")
-        .replace(new RegExp(`${escapeRegExp(ESC)}\\[M.{0,3}`, "g"), "")
-        .replace(new RegExp(`${escapeRegExp(ESC)}.`, "g"), "")
-        .replace(new RegExp(PARTIAL_SGR_MOUSE_PATTERN), "")
-        .split(ESC).join("");
-      // Terminals deliver pasted line breaks as CR (\r). Normalize CR/CRLF to LF
-      // before stripping C0 controls (which would otherwise drop the bare \r and
-      // silently merge multi-line pastes into one line). This keeps line
-      // boundaries intact for multi-line/KEY=value pastes.
-      const newlineNormalized = stripped.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-      return stripC0Controls(newlineNormalized);
-    },
-  };
-}
 
 export function stripTerminalControlInput(value: string): string {
   return defaultStripper.strip(value);
 }
 
 export function parseSgrMouse(input: string): SgrMouseReport | null {
-  const match = new RegExp(`${escapeRegExp(ESC)}?${SGR_MOUSE_PATTERN}`).exec(input);
-  if (!match) return null;
-
-  const parts = match[0].split(ESC).join("").match(/\[<(\d+);(\d+);(\d+)([mM])/);
+  const parts = new RegExp(`${ESC}?\\[<(\\d+);(\\d+);(\\d+)([mM])`).exec(input);
   if (!parts) return null;
-
   const code = Number(parts[1]);
+  const x = Number(parts[2]);
+  const y = Number(parts[3]);
+  if (![code, x, y].every(Number.isSafeInteger) || code > 255 || x < 1 || y < 1) return null;
   const final = parts[4] as "M" | "m";
-
   return {
-    code,
-    x: Number(parts[2]),
-    y: Number(parts[3]),
-    final,
-    action: classifySgrMouse(code, final),
+    code, x, y, final,
+    action: final === "m" ? "release" : (code & 64) ? "scroll" : (code & 32) ? "move" : "press",
   };
-}
-
-function classifySgrMouse(code: number, final: "M" | "m"): SgrMouseReport["action"] {
-  if (final === "m") return "release";
-  if ((code & 64) === 64) return "scroll";
-  if ((code & 32) === 32) return "move";
-  return "press";
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function findPartialTerminalControl(input: string): { index: number; sequence: string } | null {
-  const escIndex = input.lastIndexOf(ESC);
-  if (escIndex === -1) {
-    // No ESC, but an ESC-stripped bracketed-paste guard may have been split
-    // across chunks (e.g. "...text[20" then "1~"). Only hold a trailing partial
-    // that is already an unambiguous prefix of "[200~"/"[201~" (at least "[20")
-    // so ordinary typing of "[" or "[2" is never delayed or dropped.
-    const bare = input.match(/\[20[01]?~?$|\[20$/);
-    if (bare && bare.index !== undefined) {
-      return { index: bare.index, sequence: bare[0] };
-    }
-    return null;
-  }
-  const tail = input.slice(escIndex);
-  if (tail === ESC) return { index: escIndex, sequence: tail };
-  if (tail.startsWith(`${ESC}[`)) {
-    const csiBody = tail.slice(2);
-    if (/^[0-?]*[ -/]*$/.test(csiBody) || csiBody === "200" || csiBody === "201") {
-      return { index: escIndex, sequence: tail };
-    }
-  }
-  if (tail.startsWith(`${ESC}]`) && !tail.includes(BEL) && !tail.includes(`${ESC}\\`)) {
-    return { index: escIndex, sequence: tail };
-  }
-  return null;
-}
-
-function stripC0Controls(value: string): string {
-  let clean = "";
-  for (const char of value) {
-    const code = char.charCodeAt(0);
-    if ((code >= 0 && code <= 8) || (code >= 11 && code <= 31) || code === 127) continue;
-    clean += char;
-  }
-  return clean;
 }

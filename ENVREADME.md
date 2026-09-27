@@ -89,7 +89,7 @@ setupr env init --force
 # Check for missing variables
 setupr env check
 
-# Sync .env structure with .env.example (preserves values)
+# Append missing template entries without reordering or removing existing data
 setupr env sync
 
 # Smart analysis: detect issues + interactive fix
@@ -111,14 +111,15 @@ setupr env smart
 2. Detects issues: missing vars, empty values, invalid values (bad URLs, short keys, placeholder text)
 3. Reports extra vars not in .env.example
 4. In interactive mode (TTY), prompts you to fix each issue
-5. Reorganizes .env to match .env.example ordering
-6. Preserves all existing valid values and extra vars
+5. Saves only when required values pass basic validation; skipped or invalid answers report an error without writing
+6. Preserves existing comments, ordering, quoted/multiline values, intentional blanks, and extra variables
 
 ### Safety Defaults
 
 - `setupr env init` never overwrites an existing `.env` unless you pass `--force`
 - `setupr env init` does not create `.env` when `.env.example` is missing unless you pass `--force`; without force it returns `ENV_TEMPLATE_MISSING`
-- with `--force`, a missing `.env.example` creates an empty `.env` and reports that no variables were inferred
+- with `--force`, a missing `.env.example` creates an empty `.env` only when no `.env` exists; an existing file is retained
+- editor saves reject symlinks and conflicting on-disk edits rather than silently overwriting them
 - `setupr setup` creates a missing `.env` from `.env.example` during the environment step
 - `setupr env check` exits non-zero when required variables are missing
 - Plain-mode setup stops and exits non-zero if install, env setup, build, or verification fails
@@ -136,3 +137,29 @@ setupr env smart
 - Setupr provider API keys should live in global auth storage, not project `.env`
 - Setupr masks sensitive env values before AI context is built
 - `.env` files are in `.gitignore` by default
+
+## Project Secrets
+
+`setupr secrets` is separate from provider authentication. It stores project values in
+`.setupr/secrets.enc`, encrypted with a local `.setupr/secrets.key`.
+
+```sh
+setupr secrets init
+setupr secrets set DATABASE_PASSWORD
+setupr secrets list
+setupr secrets export .env.local
+```
+
+Omit the value from `secrets set` to use a hidden prompt with no input history.
+Inline values can still appear in your shell history and operating-system process arguments,
+even though Setupr redacts them from its own command history. `list` hides values completely;
+`get <name>` deliberately prints a requested value, and `export` writes plaintext.
+
+Exports preserve unrelated file content, quote supported multiline/hash values correctly,
+use private file permissions, and refuse symlinks or overwriting the encryption files.
+New names must be valid environment identifiers. Missing values, missing files, invalid
+encrypted payloads, and values that cannot be safely serialized produce errors without
+pretending the operation succeeded.
+
+Keep the key private and backed up. Losing or replacing it makes existing ciphertext
+unreadable. Back up both files before rotation; key rotation is not an atomic two-file transaction.

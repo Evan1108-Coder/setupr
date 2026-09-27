@@ -82,7 +82,7 @@ export const ERROR_CATALOG: Record<SetuprErrorCode, Template> = {
   GIT_BRANCH_EXISTS: git("Branch already exists", "A branch with that name already exists.", ["Choose a different name or delete the existing branch."]),
   GIT_MERGE_CONFLICT: git("Merge conflict", "Git encountered merge conflicts that must be resolved manually.", ["Resolve conflicts, then run git add and git commit."]),
   GIT_PUSH_FAILED: git("Push failed", "Git could not push to the remote.", ["Check remote access and branch protection rules."]),
-  GIT_REMOTE_MISSING: git("No remote configured", "This repository has no remote origin.", ["Run git remote add origin <url>."]),
+  GIT_REMOTE_MISSING: git("No matching remote configured", "No usable remote matches this command or the requested remote name.", ["Run git remote -v to inspect remotes.", "Select an existing remote with --remote <name> where supported, or add one with git remote add <name> <url>."]),
   GIT_HOOK_FAILED: git("Git hook failed", "A git hook exited with an error.", ["Fix the hook issue or use --no-verify to skip."]),
   GIT_COMMAND_FAILED: git("Git command failed", "A git command exited with a non-zero status.", ["Check the git output for details."]),
 

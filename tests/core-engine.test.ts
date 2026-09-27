@@ -2,7 +2,7 @@ import { mkdtemp, readFile, writeFile } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 import { describe, expect, it } from "vitest";
-import { createProjectEngine, redactObject, redactText } from "../src/core/engine.js";
+import { createProjectEngine, redactCommandArguments, redactObject, redactText } from "../src/core/engine.js";
 import { runProjectCommandOperation } from "../src/core/operations.js";
 import { readRecentHistoryEvents, readRecentLogEvents } from "../src/state/project.js";
 
@@ -33,6 +33,25 @@ describe("ProjectEngine", () => {
     expect(redactObject({ nested: { githubToken: "github_pat_abcdef123456" } })).toEqual({
       nested: { githubToken: "github_pat_****" },
     });
+  });
+
+  it("redacts arbitrary credentials even without a known provider prefix", async () => {
+    expect(redactObject({ password: "local-db-password", apiKey: "12345", nested: { accessToken: "opaque-value" } })).toEqual({
+      password: "****", apiKey: "****", nested: { accessToken: "****" },
+    });
+    const cwd = await tempProject();
+    const engine = createProjectEngine({ cwd, command: "status" });
+    await engine.recordCommand({ type: "command.start", extra: { credentials: "private-value" } });
+    expect(JSON.stringify(await readRecentHistoryEvents(cwd))).not.toContain("private-value");
+  });
+
+  it("does not record positional secret values in command descriptions or history", async () => {
+    const cwd = await tempProject();
+    const args = ["DATABASE_PASSWORD", "opaque private phrase"];
+    const engine = createProjectEngine({ cwd, command: "secrets", subcommand: "set", args });
+    await engine.recordCommand({ type: "command.start", extra: { args: redactCommandArguments("secrets", "set", args) } });
+    expect(engine.command.display).toBe("setupr secrets set DATABASE_PASSWORD ****");
+    expect(JSON.stringify(await engine.history())).not.toContain("opaque private phrase");
   });
 });
 

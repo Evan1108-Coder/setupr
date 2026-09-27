@@ -5,7 +5,7 @@ import { detectPackageManager } from "./packageManager.js";
 import { detectRuntime } from "./runtimeDetector.js";
 import { detectServices } from "./serviceDetector.js";
 import { detectMonorepo } from "./monorepoDetector.js";
-import { createSetuprError } from "../errors/index.js";
+import { readProjectJsonFile } from "./projectValidation.js";
 
 export interface ScanResult {
   language: string | null;
@@ -58,6 +58,7 @@ export async function scanProject(cwd: string): Promise<ScanResult> {
   const packageManager = settled(results[2], null) as string | null;
   const runtime = settled(results[3], null) as ScanResult["runtime"];
   const services = settled(results[4], []) as string[];
+  if (results[5].status === "rejected") throw results[5].reason;
   const monorepo = settled(results[5], null) as ScanResult["monorepo"];
 
   const scripts = await getScripts(cwd, packageManager);
@@ -78,23 +79,8 @@ export async function scanProject(cwd: string): Promise<ScanResult> {
 }
 
 async function validateProjectFiles(cwd: string): Promise<void> {
-  const { readFile } = await import("fs/promises");
-  const { join } = await import("path");
   for (const file of ["package.json", ".setupr.json", "lerna.json"]) {
-    try {
-      const raw = await readFile(join(cwd, file), "utf-8");
-      JSON.parse(raw);
-    } catch (err) {
-      const code = (err as { code?: string } | undefined)?.code;
-      if (code === "ENOENT") continue;
-      const message = err instanceof Error ? err.message : String(err);
-      throw createSetuprError({
-        code: file === ".setupr.json" ? "PROJECT_CONFIG_INVALID" : "MALFORMED_PROJECT_FILE",
-        cwd,
-        details: [`File: ${file}`, message],
-        canContinue: false,
-      });
-    }
+    await readProjectJsonFile(cwd, file);
   }
 }
 

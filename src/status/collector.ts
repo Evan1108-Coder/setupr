@@ -11,6 +11,7 @@ import { readRecentHistoryEvents, readRecentLogEvents, readProjectState, type Pr
 import { listManagedProcesses } from "../processes/manager.js";
 import { collectVerificationSummary } from "../verification/index.js";
 import { collectSecuritySummary, type SecurityFinding } from "../security/index.js";
+import { readGitRemotes, selectGitRemote } from "../util/gitRemote.js";
 
 export interface DashboardStatus {
   cwd: string;
@@ -20,7 +21,7 @@ export interface DashboardStatus {
   hasProject: boolean;
   scanError?: string;
   health: {
-    score: number;
+    score: number | null;
     label: "good" | "warning" | "error";
     checks: Array<{ label: string; status: "ok" | "warning" | "error"; detail: string }>;
   };
@@ -45,6 +46,7 @@ export interface DashboardStatus {
   };
   dependencies: {
     packageManager: string | null;
+    manifest?: string;
     prod: number;
     dev: number;
     lockfile?: string;
@@ -61,8 +63,8 @@ export interface DashboardStatus {
     lastCommand?: string;
   };
   security: {
-    score: number;
-    findings: number;
+    score: number | null;
+    findings: number | null;
     topFindings: SecurityFinding[];
   };
   ai: {
@@ -93,7 +95,7 @@ export async function collectDashboardStatus(cwd: string): Promise<DashboardStat
     readRecentLogEvents(cwd, 8),
     readProjectState<JsonObject>(cwd, {}),
     collectVerificationSummary(cwd).catch(() => ({ status: "unavailable", lastRun: undefined })),
-    collectSecuritySummary(cwd).catch(() => ({ score: 100, topFindings: [], lastRun: undefined })),
+    collectSecuritySummary(cwd).catch(() => null),
   ]);
 
   const dependencies = collectDependencyStatus(cwd, scan);
@@ -103,9 +105,9 @@ export async function collectDashboardStatus(cwd: string): Promise<DashboardStat
     lastCommand: verificationSummary.lastRun?.command,
   };
   const security: DashboardStatus["security"] = {
-    score: securitySummary.score,
-    findings: securitySummary.lastRun?.findings.length ?? securitySummary.topFindings.length,
-    topFindings: securitySummary.topFindings,
+    score: securitySummary?.lastRun ? securitySummary.score : null,
+    findings: securitySummary?.lastRun ? securitySummary.lastRun.findings.length : null,
+    topFindings: securitySummary?.topFindings || [],
   };
   const health = computeHealth({ scan, scanError, hasProject, git, env, dependencies, processes, verification, security });
   const history = normalizeProjectEvents(rawHistory);
@@ -147,7 +149,7 @@ export function createDashboardFallbackStatus(cwd: string, reason: string): Dash
     hasProject: false,
     scanError: reason,
     health: {
-      score: 64,
+      score: null,
       label: "warning",
       checks: [
         { label: "Project", status: "warning", detail: "Status collection timed out" },
@@ -155,6 +157,7 @@ export function createDashboardFallbackStatus(cwd: string, reason: string): Dash
         { label: "Env", status: "warning", detail: "Not collected" },
         { label: "Dependencies", status: "warning", detail: "Not collected" },
         { label: "Processes", status: "warning", detail: "Not collected" },
+        { label: "Security", status: "warning", detail: "Not collected" },
       ],
     },
     git: { isRepo: false, dirtyFiles: 0, stagedFiles: 0, untrackedFiles: 0, recent: [] },
@@ -162,7 +165,7 @@ export function createDashboardFallbackStatus(cwd: string, reason: string): Dash
     dependencies: { packageManager: null, prod: 0, dev: 0, lockfilePresent: false },
     processes: { managed: 0, running: 0, crashed: 0, entries: [] },
     verification: { status: "not collected" },
-    security: { score: 100, findings: 0, topFindings: [] },
+    security: { score: null, findings: null, topFindings: [] },
     ai: { activeModel: getDefaultModel().id, availableModels: getAvailableModels().length },
     history: [],
     logs: [],
@@ -178,9 +181,9 @@ async function collectGitStatus(cwd: string): Promise<DashboardStatus["git"]> {
     return { isRepo: false, dirtyFiles: 0, stagedFiles: 0, untrackedFiles: 0, recent: [] };
   }
 
-  const [branch, remote, status, recent] = await Promise.all([
+  const [branch, remotes, status, recent] = await Promise.all([
     runStatusCommand("git branch --show-current", cwd),
-    runStatusCommand("git remote get-url origin", cwd),
+    readGitRemotes(cwd),
     runStatusCommand("git status --porcelain=v1 --branch", cwd),
     runStatusCommand("git log --oneline -5", cwd),
   ]);
@@ -210,7 +213,7 @@ async function collectGitStatus(cwd: string): Promise<DashboardStatus["git"]> {
   return {
     isRepo: true,
     branch: branch.stdout.trim() || "detached",
-    remote: remote.exitCode === 0 ? remote.stdout.trim() : undefined,
+    remote: selectGitRemote(remotes)?.url,
     dirtyFiles,
     stagedFiles,
     untrackedFiles,
@@ -254,6 +257,8 @@ async function collectEnvStatus(cwd: string): Promise<DashboardStatus["env"]> {
 }
 
 function collectDependencyStatus(cwd: string, scan: ScanResult | null): DashboardStatus["dependencies"] {
+  const manifest = ["package.json", "pyproject.toml", "requirements.txt", "Pipfile", "setup.py", "setup.cfg", "Cargo.toml", "go.mod", "Gemfile", "composer.json", "pubspec.yaml", "mix.exs"]
+    .find((file) => existsSync(join(cwd, file)));
   const lockfiles = [
     "package-lock.json",
     "pnpm-lock.yaml",
@@ -267,6 +272,7 @@ function collectDependencyStatus(cwd: string, scan: ScanResult | null): Dashboar
   const lockfile = lockfiles.find((file) => existsSync(join(cwd, file)));
   return {
     packageManager: scan?.packageManager || null,
+    manifest,
     prod: scan?.dependencies.prod || 0,
     dev: scan?.dependencies.dev || 0,
     lockfile,
@@ -277,7 +283,6 @@ function collectDependencyStatus(cwd: string, scan: ScanResult | null): Dashboar
 async function collectProcessStatus(cwd: string): Promise<DashboardStatus["processes"]> {
   const rawProcesses = await listManagedProcesses(cwd);
   const entries = rawProcesses
-    .slice(0, 8)
     .map((entry) => ({
       name: String(entry.name || entry.id || "process"),
       pid: typeof entry.pid === "number" ? entry.pid : undefined,
@@ -288,7 +293,7 @@ async function collectProcessStatus(cwd: string): Promise<DashboardStatus["proce
     managed: entries.length,
     running: entries.filter((entry) => entry.status === "running").length,
     crashed: entries.filter((entry) => entry.status === "crashed" || entry.status === "failed").length,
-    entries,
+    entries: entries.slice(0, 8),
   };
 }
 
@@ -313,7 +318,7 @@ function computeHealth(input: {
   checks.push(input.env.hasExample
     ? { label: "Env", status: input.env.missing.length > 0 ? "error" : "ok", detail: input.env.missing.length > 0 ? `${input.env.missing.length} missing value(s)` : `${input.env.defined}/${input.env.required} values` }
     : { label: "Env", status: "warning", detail: "No .env.example" });
-  checks.push(input.dependencies.prod + input.dependencies.dev > 0
+  checks.push(input.dependencies.manifest
     ? { label: "Dependencies", status: input.dependencies.lockfilePresent ? "ok" : "warning", detail: `${input.dependencies.prod} prod, ${input.dependencies.dev} dev${input.dependencies.lockfile ? `, ${input.dependencies.lockfile}` : ""}` }
     : { label: "Dependencies", status: "warning", detail: "No dependency manifest detected" });
   checks.push(input.processes.crashed > 0
@@ -324,11 +329,13 @@ function computeHealth(input: {
     : input.verification.status === "no test runs" || input.verification.status === "not collected"
       ? { label: "Tests", status: "warning", detail: input.verification.status }
       : { label: "Tests", status: input.verification.status.startsWith("warn") ? "warning" : "ok", detail: input.verification.status });
-  checks.push(input.security.findings > 0
-    ? { label: "Security", status: input.security.score < 70 ? "error" : "warning", detail: `${input.security.findings} finding(s), score ${input.security.score}` }
-    : { label: "Security", status: "ok", detail: `score ${input.security.score}` });
+  checks.push(input.security.score === null
+    ? { label: "Security", status: "warning", detail: "Security assessment unavailable" }
+    : (input.security.findings ?? 0) > 0
+      ? { label: "Security", status: input.security.score < 70 ? "error" : "warning", detail: `${input.security.findings} finding(s), score ${input.security.score}` }
+      : { label: "Security", status: "ok", detail: `score ${input.security.score}` });
 
-  const score = Math.max(0, Math.round(100 - checks.reduce((total, check) => total + (check.status === "error" ? 30 : check.status === "warning" ? 12 : 0), 0)));
+  const score = input.security.score === null ? null : Math.max(0, Math.round(100 - checks.reduce((total, check) => total + (check.status === "error" ? 30 : check.status === "warning" ? 12 : 0), 0)));
   const label = checks.some((check) => check.status === "error") ? "error" : checks.some((check) => check.status === "warning") ? "warning" : "good";
   return { score, label, checks };
 }

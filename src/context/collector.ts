@@ -6,10 +6,17 @@ import { dirname, join } from "path";
 import type { ScanResult } from "../scanner/index.js";
 import { type ProjectContext } from "../ai/dsl.js";
 import { compressDocumentExcerpt } from "../ai/contextCompression.js";
+import { parseEnvKeys, parseEnvPairs } from "../env/index.js";
+import { readGitRemotes, selectGitRemote } from "../util/gitRemote.js";
 
 export async function collectContext(cwd: string, scan: ScanResult): Promise<ProjectContext> {
   const cached = await readCachedContext(cwd, scan);
-  if (cached) return cached;
+  if (cached) {
+    const [git, envVars, fileTree, terminal] = await Promise.all([
+      collectGitInfo(cwd), collectEnvVars(cwd), collectFileTree(cwd), collectTerminalInfo(),
+    ]);
+    return { ...cached, scan, git, envVars, fileTree, terminal, collectedAt: Date.now() };
+  }
 
   const [git, envVars, fileTree, terminal, documents] = await Promise.all([
     collectGitInfo(cwd),
@@ -54,12 +61,7 @@ async function collectGitInfo(cwd: string): Promise<ProjectContext["git"]> {
     const branch = execSync("git branch --show-current", { cwd, stdio: "pipe" })
       .toString()
       .trim();
-    let remoteUrl: string | undefined;
-    try {
-      remoteUrl = execSync("git remote get-url origin", { cwd, stdio: "pipe" })
-        .toString()
-        .trim();
-    } catch {}
+    const remoteUrl = selectGitRemote(await readGitRemotes(cwd))?.url;
     const isDirty =
       execSync("git status --porcelain", { cwd, stdio: "pipe" })
         .toString()
@@ -77,27 +79,17 @@ async function collectEnvVars(cwd: string): Promise<ProjectContext["envVars"]> {
 
   try {
     const example = await readFile(join(cwd, ".env.example"), "utf-8");
-    const requiredVars = example
-      .split("\n")
-      .filter((l) => l.trim() && !l.startsWith("#"))
-      .map((l) => l.split("=")[0].trim())
-      .filter(Boolean);
+    const requiredVars = parseEnvKeys(example);
     templateKeys.push(...requiredVars);
 
-    let currentVars: Set<string> = new Set();
+    let currentVars: Record<string, string> = Object.create(null);
     try {
       const env = await readFile(join(cwd, ".env"), "utf-8");
-      currentVars = new Set(
-        env
-          .split("\n")
-          .filter((l) => l.trim() && !l.startsWith("#"))
-          .map((l) => l.split("=")[0].trim())
-          .filter(Boolean)
-      );
+      currentVars = parseEnvPairs(env);
     } catch {}
 
     for (const v of requiredVars) {
-      if (currentVars.has(v) || process.env[v]) {
+      if (currentVars[v]?.trim() || process.env[v]?.trim()) {
         defined.push(v);
       } else {
         missing.push(v);
@@ -178,6 +170,8 @@ async function collectDocuments(cwd: string): Promise<NonNullable<ProjectContext
       for (const entry of entries.slice(0, 20)) {
         if (!entry.isFile() || !/\.(md|mdx|txt|ya?ml)$/i.test(entry.name)) continue;
         const rel = `${dir}/${entry.name}`;
+        const info = await stat(join(cwd, rel));
+        if (!info.isFile() || info.size > 512_000) continue;
         const content = await readFile(join(cwd, rel), "utf-8").catch(() => "");
         if (content) {
           const kind = dir === "docs" ? "docs" : "ci";
@@ -264,21 +258,29 @@ async function cacheKey(cwd: string, scan: ScanResult): Promise<string> {
   const files = [
     "package.json",
     "README.md",
+    "README",
     "SETUP.md",
     "CONTRIBUTING.md",
     ".env.example",
     "Dockerfile",
     "docker-compose.yml",
+    "compose.yml",
+    ".github/workflows/ci.yml",
+    ".github/workflows/ci.yaml",
+    ".gitlab-ci.yml",
     ".setupr.json",
   ];
+  for (const dir of ["docs", ".github"]) {
+    try {
+      const entries = await readdir(join(cwd, dir), { withFileTypes: true });
+      for (const entry of entries.slice(0, 20)) {
+        if (entry.isFile() && /\.(md|mdx|txt|ya?ml)$/i.test(entry.name)) files.push(`${dir}/${entry.name}`);
+      }
+    } catch {}
+  }
   const hash = createHash("sha256");
-  hash.update(JSON.stringify({
-    language: scan.language,
-    framework: scan.framework,
-    packageManager: scan.packageManager,
-    scripts: scan.scripts,
-    configFiles: scan.configFiles,
-  }));
+  hash.update("context-v2");
+  hash.update(JSON.stringify(scan));
   for (const file of files) {
     try {
       const info = await stat(join(cwd, file));

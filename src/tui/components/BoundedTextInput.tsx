@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Box, Text, useInput } from "ink";
+import { Box, Text } from "ink";
+import stringWidth from "string-width";
+import isFullwidthCodePoint from "is-fullwidth-code-point";
 import { colors } from "../theme.js";
-import { createTerminalControlInputStripper, parseSgrMouse } from "../terminalInput.js";
+import { createTerminalControlInputStripper, useTerminalInput } from "../terminalInput.js";
 import type { FocusBounds } from "../hooks/useFocusNavigation.js";
 
 interface BoundedTextInputProps {
@@ -28,9 +30,10 @@ export function BoundedTextInput({
   scrollBounds,
 }: BoundedTextInputProps) {
   const [cursor, setCursor] = useState(value.length);
-  const [scrollLine, setScrollLine] = useState(0);
+  const [submissionRevision, setSubmissionRevision] = useState(0);
+  const [scroll, setScroll] = useState<{ lines: WrappedLine[]; height: number; line: number } | null>(null);
   const controlStripper = useMemo(() => createTerminalControlInputStripper(), []);
-  const wrapWidth = Math.max(1, width || 80);
+  const wrapWidth = Math.max(1, Math.floor(width || 80));
 
   // The controlled `value` prop only updates after a React render. A burst of
   // keystrokes that arrives before the next render would otherwise all read the
@@ -52,7 +55,7 @@ export function BoundedTextInput({
   useEffect(() => {
     // Already in sync with our live edit state — nothing to adopt.
     if (value === valueRef.current) {
-      pendingEmitsRef.current.delete(value);
+      pendingEmitsRef.current.clear();
       return;
     }
     // A lagging echo of a value we emitted (React may render intermediate burst
@@ -64,124 +67,136 @@ export function BoundedTextInput({
     // Genuine external change (e.g. parent reset after submit).
     pendingEmitsRef.current.clear();
     valueRef.current = value;
-    cursorRef.current = Math.min(cursorRef.current, value.length);
+    cursorRef.current = graphemeBoundary(value, Math.min(cursorRef.current, value.length));
     setCursor(cursorRef.current);
-  }, [value]);
+  }, [value, submissionRevision]);
 
-  const displayValue = mask ? mask.repeat(value.length) : value;
-  const renderedValue = focus
-    ? `${displayValue.slice(0, cursor)}▌${displayValue.slice(cursor)}`
-    : displayValue;
-  const lines = useMemo(() => wrapLines(renderedValue || placeholder, wrapWidth), [renderedValue, placeholder, wrapWidth]);
-  const visibleHeight = Math.min(maxLines, Math.max(1, lines.length));
+  const { lines, cursorLine } = useMemo(
+    () => wrapInput(value, cursor, focus, mask, placeholder, wrapWidth),
+    [value, cursor, focus, mask, placeholder, wrapWidth]
+  );
+  const visibleHeight = Math.min(Math.max(1, Math.floor(maxLines)), Math.max(1, lines.length));
   const maxScroll = Math.max(0, lines.length - visibleHeight);
-
-  useEffect(() => {
-    if (scrollLine > maxScroll) setScrollLine(maxScroll);
-  }, [maxScroll, scrollLine]);
-
-  useEffect(() => {
-    if (!focus) return;
-    const cursorLine = findLineForCursor(displayValue, cursor, wrapWidth);
-    if (cursorLine < scrollLine) {
-      setScrollLine(cursorLine);
-    } else if (cursorLine >= scrollLine + visibleHeight) {
-      setScrollLine(Math.min(maxScroll, cursorLine - visibleHeight + 1));
-    }
-  }, [cursor, displayValue, focus, maxScroll, scrollLine, visibleHeight, wrapWidth]);
+  // Manual scrolling persists until text, caret, focus, or geometry changes.
+  // Deriving this avoids a stale top-of-input frame before an effect catches up.
+  const scrollLine = scroll?.lines === lines && scroll.height === visibleHeight
+    ? clamp(scroll.line, 0, maxScroll)
+    : clamp(focus ? cursorLine - visibleHeight + 1 : scroll?.line || 0, 0, maxScroll);
+  const scrollBy = (delta: number) => setScroll((current) => ({
+    lines, height: visibleHeight,
+    line: clamp((current?.lines === lines ? current.line : scrollLine) + delta, 0, maxScroll),
+  }));
 
   // Apply a text edit synchronously against the live ref state, then notify the
   // parent and schedule the visible caret update.
   const commit = (nextValue: string, nextCursor: number) => {
     valueRef.current = nextValue;
-    cursorRef.current = clamp(nextCursor, 0, nextValue.length);
+    cursorRef.current = nextCursor <= 0 ? 0 : nextGraphemeIndex(nextValue, clamp(nextCursor - 1, 0, nextValue.length));
     pendingEmitsRef.current.add(nextValue);
+    setScroll(null);
     setCursor(cursorRef.current);
     onChange(nextValue);
   };
 
   const moveCursor = (nextCursor: number) => {
-    cursorRef.current = clamp(nextCursor, 0, valueRef.current.length);
+    cursorRef.current = graphemeBoundary(valueRef.current, clamp(nextCursor, 0, valueRef.current.length));
     setCursor(cursorRef.current);
+    setScroll(null);
   };
 
-  useInput((input, key) => {
-    const mouse = parseSgrMouse(input);
-    if (mouse?.action === "press") {
-      if (scrollBounds && pointInBounds(mouse.x, mouse.y, scrollBounds)) {
-        const line = clamp(mouse.y - scrollBounds.y + scrollLine, 0, Math.max(0, lines.length - 1));
-        const column = clamp(mouse.x - scrollBounds.x, 0, wrapWidth);
-        moveCursor(cursorForWrappedPosition(valueRef.current, line, column, wrapWidth));
-      }
-      return;
-    }
+  const submit = (text: string, steer = false) => {
+    onSubmit(text, { steer });
+    // Coalesced typing and submit may leave the parent's value unchanged (an
+    // empty chat draft cleared in the same batch). Reconcile its response even
+    // when the value dependency alone would not run the effect again.
+    setSubmissionRevision((revision) => revision + 1);
+  };
 
-    if (mouse?.action === "scroll") {
-      if (scrollBounds && !pointInBounds(mouse.x, mouse.y, scrollBounds)) {
-        return;
+  useTerminalInput((_input, key, input) => {
+    const chunk = controlStripper.read(input);
+    for (const mouse of chunk.mouse) {
+      if (chunk.paste || chunk.text) continue;
+      if (mouse.action === "press" && (mouse.code & 3) === 0) {
+        if (scrollBounds && pointInBounds(mouse.x, mouse.y, scrollBounds)) {
+          const line = clamp(mouse.y - scrollBounds.y + scrollLine, 0, Math.max(0, lines.length - 1));
+          const column = clamp(mouse.x - scrollBounds.x, 0, wrapWidth);
+          moveCursor(cursorForWrappedPosition(lines[line], column));
+        }
+      } else if (focus && mouse.action === "scroll" && (mouse.code & 3) < 2) {
+        if (!scrollBounds || pointInBounds(mouse.x, mouse.y, scrollBounds)) {
+          scrollBy((mouse.code & 1) === 0 ? -1 : 1);
+        }
       }
-      setScrollLine((current) => clamp(current + (mouse.code === 64 ? -1 : 1), 0, maxScroll));
-      return;
     }
+    if (!focus) return;
 
     const liveValue = valueRef.current;
     const liveCursor = clamp(cursorRef.current, 0, liveValue.length);
 
-    const shortcut = shortcutFromInput(input, key);
+    const shortcut = !chunk.paste && !chunk.continuation && shortcutFromInput(input, key);
     if (shortcut) {
       applyShortcut(shortcut, liveValue, liveCursor, commit, moveCursor);
       return;
     }
 
-    const cleanInput = controlStripper.strip(input).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-    const returnOnly = key.return || input === "\r" || input === "\n" || cleanInput === "\n";
-    if (!cleanInput && !returnOnly && !key.backspace && !key.delete && !key.leftArrow && !key.rightArrow && !key.upArrow && !key.downArrow) {
+    const cleanInput = chunk.text;
+    if (chunk.paste || chunk.continuation) {
+      if (cleanInput) commit(liveValue.slice(0, liveCursor) + cleanInput + liveValue.slice(liveCursor), liveCursor + cleanInput.length);
+      return;
+    }
+    if (input === "\x1b[13;5u") {
+      submit(liveValue, true);
+      return;
+    }
+    // stdin read boundaries are not keystroke boundaries. A single-line chunk
+    // ending in Enter is typing + submit; bracketed paste was handled above.
+    // Keep unbracketed multiline chunks as drafts rather than guessing that a
+    // pasted line break was intended to submit an action.
+    if (/[\r\n]$/.test(input) && /^[^\n]*\n$/.test(cleanInput)) {
+      const typed = cleanInput.slice(0, -1);
+      const nextValue = liveValue.slice(0, liveCursor) + typed + liveValue.slice(liveCursor);
+      if (typed) commit(nextValue, liveCursor + typed.length);
+      submit(nextValue, Boolean(key.ctrl));
       return;
     }
 
-    if (returnOnly) {
-      onSubmit(liveValue, { steer: Boolean(key.ctrl) });
-      return;
-    }
-
-    // macOS Backspace sends \x7f, which Ink reports as `key.delete` with an empty
-    // `input`; Fn+Delete (\x1b[3~) is reported identically. Both are treated as a
-    // backward delete because that is what the dominant Backspace key should do.
-    // Forward delete remains available via Ctrl+D (handled as a shortcut above).
+    // Preserve the existing backward-delete behavior for both Backspace and
+    // Fn+Delete. Ctrl+D is the explicit forward-delete shortcut.
     if (key.backspace || key.delete || input === "\x7f") {
       if (liveCursor === 0) return;
-      commit(liveValue.slice(0, liveCursor - 1) + liveValue.slice(liveCursor), liveCursor - 1);
+      const previous = previousGraphemeIndex(liveValue, liveCursor);
+      commit(liveValue.slice(0, previous) + liveValue.slice(liveCursor), previous);
       return;
     }
 
     if (key.leftArrow) {
-      moveCursor(liveCursor - 1);
+      moveCursor(previousGraphemeIndex(liveValue, liveCursor));
       return;
     }
 
     if (key.rightArrow) {
-      moveCursor(liveCursor + 1);
+      moveCursor(nextGraphemeIndex(liveValue, liveCursor));
       return;
     }
 
     if (key.upArrow) {
-      setScrollLine((current) => clamp(current - 1, 0, maxScroll));
+      scrollBy(-1);
       return;
     }
 
     if (key.downArrow) {
-      setScrollLine((current) => clamp(current + 1, 0, maxScroll));
+      scrollBy(1);
       return;
     }
 
-    if (key.tab || key.escape || (key.ctrl && input === "c")) {
+    if (key.tab || key.escape || key.ctrl || key.meta) {
       return;
     }
 
     if (cleanInput) {
       commit(liveValue.slice(0, liveCursor) + cleanInput + liveValue.slice(liveCursor), liveCursor + cleanInput.length);
     }
-  }, { isActive: focus });
+  });
 
   const visibleLines = lines.slice(scrollLine, scrollLine + visibleHeight);
   const placeholderColor = value.length === 0 ? colors.textDim : colors.text;
@@ -190,46 +205,91 @@ export function BoundedTextInput({
     <Box flexDirection="column" height={visibleHeight} overflowY="hidden" width={wrapWidth} minWidth={0} flexShrink={1}>
       {visibleLines.map((line, index) => (
         <Text key={`${scrollLine}-${index}`} color={placeholderColor} wrap="truncate">
-          {line || " "}
+          {line.text || " "}
         </Text>
       ))}
     </Box>
   );
 }
 
-function wrapLines(value: string, width: number): string[] {
-  return wrapLineSegments(value, width).map((line) => line.text);
+const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+interface WrappedLine {
+  text: string;
+  stops: Array<{ column: number; index: number }>;
 }
 
-function wrapLineSegments(value: string, width: number): Array<{ text: string; start: number }> {
-  const rawLines = value.split("\n");
-  const lines: Array<{ text: string; start: number }> = [];
-  let absoluteIndex = 0;
-
-  for (const rawLine of rawLines) {
-    if (rawLine.length === 0) {
-      lines.push({ text: "", start: absoluteIndex });
-      absoluteIndex += 1;
-      continue;
+function wrapInput(value: string, cursor: number, focus: boolean, mask: string | undefined, placeholder: string, width: number) {
+  const lines: WrappedLine[] = [{ text: "", stops: [{ column: 0, index: 0 }] }];
+  let column = 0;
+  let cursorLine = 0;
+  const append = (text: string, start: number, end: number, caret = false) => {
+    if (text === "\n") {
+      lines.push({ text: "", stops: [{ column: 0, index: end }] });
+      column = 0;
+      return;
     }
-    for (let index = 0; index < rawLine.length; index += width) {
-      lines.push({ text: rawLine.slice(index, index + width), start: absoluteIndex + index });
+    if (text === "\t") text = " ".repeat(Math.min(width, 4 - column % 4));
+    let cells = stringWidth(text);
+    if (cells > width) { text = "…"; cells = 1; }
+    if (column + cells > width) {
+      lines.push({ text: "", stops: [{ column: 0, index: start }] });
+      column = 0;
     }
-    absoluteIndex += rawLine.length + 1;
+    if (caret) cursorLine = lines.length - 1;
+    const line = lines[lines.length - 1];
+    line.stops.push({ column, index: start });
+    line.text += text;
+    column += cells;
+    line.stops.push({ column, index: end });
+  };
+  const safeCursor = graphemeBoundary(value, clamp(cursor, 0, value.length));
+  for (const { segment, index } of segmenter.segment(value || placeholder)) {
+    if (focus && index === safeCursor) append("▌", safeCursor, safeCursor, true);
+    const source = value ? (segment === "\n" ? segment : mask || segment) : segment;
+    const presentation = presentGrapheme(source);
+    const start = value ? index : 0;
+    const end = value ? index + segment.length : 0;
+    // Escaped presentations may span rows, but every cell still maps to the
+    // original grapheme. Editing and mouse placement never split that value.
+    const pieces = [...segmenter.segment(presentation)];
+    for (let piece = 0; piece < pieces.length; piece++) {
+      append(pieces[piece].segment, start, piece === pieces.length - 1 ? end : start);
+    }
   }
-
-  return lines.length > 0 ? lines : [{ text: "", start: 0 }];
+  if (focus && safeCursor === value.length && (value || !placeholder)) append("▌", safeCursor, safeCursor, true);
+  return { lines, cursorLine };
 }
 
-function findLineForCursor(value: string, cursor: number, width: number): number {
-  const beforeCursor = value.slice(0, cursor);
-  return wrapLines(beforeCursor, width).length - 1;
+function presentGrapheme(value: string): string {
+  if (value === "\n" || value === "\t") return value;
+  const normalized = value.normalize("NFC");
+  // Ink 5 Output allocates a cell per code point, or two for supplementary /
+  // full-width points. NFC fixes composable accents; escapes preserve the exact
+  // identity of clusters its rasterizer cannot safely draw, without rewriting
+  // the controlled value or relying on a runtime patch to Ink internals.
+  const inkCells = [...normalized].reduce((cells, point) => cells + (point.length > 1 || isFullwidthCodePoint(point.codePointAt(0)!) ? 2 : 1), 0);
+  if (inkCells === stringWidth(normalized)) return normalized;
+  return [...value].map((point) => `\\u{${point.codePointAt(0)!.toString(16)}}`).join("");
 }
 
-function cursorForWrappedPosition(value: string, line: number, column: number, width: number): number {
-  const segments = wrapLineSegments(value, width);
-  const segment = segments[clamp(line, 0, Math.max(0, segments.length - 1))];
-  return clamp(segment.start + Math.min(column, segment.text.length), 0, value.length);
+function cursorForWrappedPosition(line: WrappedLine, column: number): number {
+  return line.stops.reduce((best, stop) => stop.column <= column ? stop : best, line.stops[0]).index;
+}
+
+function graphemeBoundary(value: string, cursor: number): number {
+  if (cursor >= value.length) return value.length;
+  for (const { segment, index } of segmenter.segment(value)) if (index + segment.length > cursor) return index;
+  return 0;
+}
+
+function previousGraphemeIndex(value: string, cursor: number): number {
+  return graphemeBoundary(value, Math.max(0, cursor - 1));
+}
+
+function nextGraphemeIndex(value: string, cursor: number): number {
+  for (const { segment, index } of segmenter.segment(value)) if (index + segment.length > cursor) return index + segment.length;
+  return value.length;
 }
 
 type InputShortcut =
@@ -252,8 +312,8 @@ function shortcutFromInput(input: string, key: { ctrl?: boolean; meta?: boolean;
     if (input === "w" || input === "\x17") return "delete-word-before";
     if (input === "d" || input === "\x04") return "delete-forward";
   }
-  if (input === "\x1b[H" || input === "\x1bOH") return "start";
-  if (input === "\x1b[F" || input === "\x1bOF") return "end";
+  if (["\x1b[H", "\x1bOH", "\x1b[1~", "\x1b[7~"].includes(input)) return "start";
+  if (["\x1b[F", "\x1bOF", "\x1b[4~", "\x1b[8~"].includes(input)) return "end";
   if (input === "\x17") return "delete-word-before";
   if (input === "\x1bb" || input === "\x1b[1;3D" || input === "\x1b[1;5D" || input === "\x1b[1;9D" || input === "\x1b[5D") return "word-left";
   if (input === "\x1bf" || input === "\x1b[1;3C" || input === "\x1b[1;5C" || input === "\x1b[1;9C" || input === "\x1b[5C") return "word-right";
@@ -289,7 +349,7 @@ function applyShortcut(
     return;
   }
   if (shortcut === "delete-forward") {
-    if (cursor < value.length) commit(value.slice(0, cursor) + value.slice(cursor + 1), cursor);
+    if (cursor < value.length) commit(value.slice(0, cursor) + value.slice(nextGraphemeIndex(value, cursor)), cursor);
     return;
   }
   if (shortcut === "word-left") {

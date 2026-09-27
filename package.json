@@ -1,6 +1,6 @@
 {
   "name": "@evan-coder/setupr",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Terminal dashboard for unfamiliar projects. Detect stack, env, scripts, health, and next setup steps.",
   "type": "module",
   "repository": {
@@ -24,11 +24,16 @@
     "SETUP.md",
     "ENVREADME.md",
     "TROUBLESHOOTING.md",
+    "SECURITY.md",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "docs/*.md",
     "LICENSE",
     ".env.example"
   ],
   "scripts": {
     "build": "tsup",
+    "prepack": "npm run build",
     "dev": "tsup --watch",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -36,7 +41,9 @@
     "lint": "eslint src/",
     "start": "node dist/setup.js",
     "smoke:fixtures": "npm run build && node scripts/smoke-fixtures.mjs",
-    "smoke:fixtures:tui": "npm run build && node scripts/smoke-fixtures.mjs --tui"
+    "smoke:fixtures:tui": "npm run build && node scripts/smoke-fixtures.mjs --tui",
+    "fixtures:create": "node scripts/create-test-projects.mjs",
+    "smoke:chaos": "npm run build && node scripts/smoke-chaos.mjs"
   },
   "keywords": [
     "project-setup",
@@ -72,23 +79,28 @@
     "ink-spinner": "^5.0.0",
     "ink-text-input": "^6.0.0",
     "meow": "^13.2.0",
+    "minimatch": "^10.2.6",
     "openai": "^4.78.0",
     "ora": "^8.1.1",
     "react": "^18.3.1",
+    "string-width": "^7.2.0",
     "strip-ansi": "^7.1.0",
     "yaml": "^2.7.1",
     "zustand": "^5.0.0"
+  },
+  "overrides": {
+    "esbuild": "^0.28.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
     "@types/node": "^22.10.0",
     "@types/react": "^18.3.12",
-    "@vitest/coverage-v8": "^4.1.7",
+    "@vitest/coverage-v8": "^4.1.11",
     "eslint": "^9.15.0",
     "ink-testing-library": "^4.0.0",
     "tsup": "^8.3.5",
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.59.4",
-    "vitest": "^4.1.7"
+    "vitest": "^4.1.11"
   }
 }

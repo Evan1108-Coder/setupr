@@ -1,4 +1,5 @@
-import { access, copyFile, readFile, writeFile } from "fs/promises";
+import { access, link, lstat, open, readFile, rename, unlink } from "fs/promises";
+import { randomUUID } from "crypto";
 import { join } from "path";
 
 export interface EnvInitResult {
@@ -27,6 +28,9 @@ export interface EnvEditorState {
   source: ".env" | ".env.example" | "empty";
 }
 
+// Preserve the load-time baseline across merges without adding secret metadata to UI state.
+const editorSnapshots = new WeakMap<EnvEditorEntry, { value: string; fromEnv: boolean }>();
+
 export async function fileExists(path: string): Promise<boolean> {
   try {
     await access(path);
@@ -48,7 +52,15 @@ export async function initEnvFile(
   }
 
   if (await fileExists(examplePath)) {
-    await copyFile(examplePath, envPath);
+    const content = await readFile(examplePath, "utf-8");
+    try {
+      await writeEnvFile(envPath, content, Boolean(options.overwrite));
+    } catch (error) {
+      if (!options.overwrite && (error as NodeJS.ErrnoException).code === "EEXIST") {
+        return { created: false, skipped: true, source: ".env.example", reason: "exists" };
+      }
+      throw error;
+    }
     return { created: true, skipped: false, source: ".env.example" };
   }
 
@@ -56,7 +68,15 @@ export async function initEnvFile(
     return { created: false, skipped: true, source: "empty", reason: "missing-example" };
   }
 
-  await writeFile(envPath, "# Environment variables\n");
+  try {
+    // Force without a template may create a file, but must not erase existing data.
+    await writeEnvFile(envPath, "# Environment variables\n", false);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+      return { created: false, skipped: true, source: "empty", reason: "exists" };
+    }
+    throw error;
+  }
   return { created: true, skipped: false, source: "empty" };
 }
 
@@ -88,15 +108,17 @@ export async function loadEnvEditorState(cwd: string): Promise<EnvEditorState> {
         : value.trim()
           ? "filled"
           : "empty";
-    return {
+    const entry = {
       key,
       value,
       templateValue: fromTemplate ? examplePairs[key] || "" : undefined,
       fromTemplate,
       fromEnv,
-      sensitive: isSensitiveEnvKey(key),
+      sensitive: isSensitiveEnvKey(key) || hasUrlCredentials(value) || hasUrlCredentials(examplePairs[key] || ""),
       status,
     };
+    editorSnapshots.set(entry, { value, fromEnv });
+    return entry;
   });
 
   return {
@@ -116,32 +138,62 @@ export async function saveEnvEditorEntries(cwd: string, entries: EnvEditorEntry[
   const hasEnv = await fileExists(envPath);
   const templateContent = hasExample ? await readFile(examplePath, "utf-8") : "";
   const envContent = hasEnv ? await readFile(envPath, "utf-8") : "";
-  await writeFile(envPath, serializeEnvEntries(entries, templateContent, envContent));
+  const currentPairs = parseEnvPairs(envContent);
+  const updates = entries.filter((entry) => {
+    if (!entry.key || normalizeEnvKey(entry.key) !== entry.key) {
+      throw new Error("Invalid environment variable name.");
+    }
+    const snapshot = editorSnapshots.get(entry);
+    if (!snapshot) return true;
+    const present = Object.hasOwn(currentPairs, entry.key);
+    if (entry.value === snapshot.value) return !present && !snapshot.fromEnv;
+    const changedOnDisk = present !== snapshot.fromEnv || (present && currentPairs[entry.key] !== snapshot.value);
+    if (changedOnDisk && (!present || currentPairs[entry.key] !== entry.value)) {
+      throw new Error("Environment values changed on disk. Reload the editor before saving.");
+    }
+    return true;
+  });
+  const content = serializeEnvEntries(updates, hasEnv ? envContent : templateContent);
+  if (!hasEnv || content !== envContent) await writeEnvFile(envPath, content, hasEnv, envContent);
+  const saved = parseEnvPairs(content);
+  for (const entry of entries) {
+    if (Object.hasOwn(saved, entry.key) && saved[entry.key] === entry.value) {
+      editorSnapshots.set(entry, { value: entry.value, fromEnv: true });
+    }
+  }
 }
 
 export function mergeEnvEditorValues(entries: EnvEditorEntry[], values: Record<string, string>): EnvEditorEntry[] {
+  const normalized = new Map<string, string>();
+  for (const [rawKey, value] of Object.entries(values)) {
+    const key = normalizeEnvKey(rawKey);
+    if (!key) throw new Error("Invalid environment variable name.");
+    normalized.set(key, value);
+  }
   const byKey = new Map(entries.map((entry) => [entry.key, entry]));
   const next = entries.map((entry) => {
-    if (!(entry.key in values)) return entry;
-    const value = normalizeEnvValue(values[entry.key]);
-    return {
+    if (!normalized.has(entry.key)) return entry;
+    const value = normalized.get(entry.key)!;
+    const updated = {
       ...entry,
       value,
+      sensitive: entry.sensitive || hasUrlCredentials(value),
       fromEnv: true,
       status: entry.fromTemplate ? value.trim() ? "filled" as const : "empty" as const : "extra" as const,
     };
+    const snapshot = editorSnapshots.get(entry);
+    if (snapshot) editorSnapshots.set(updated, snapshot);
+    return updated;
   });
 
-  for (const [rawKey, rawValue] of Object.entries(values)) {
-    const key = normalizeEnvKey(rawKey);
-    if (!key || byKey.has(key)) continue;
-    const value = normalizeEnvValue(rawValue);
+  for (const [key, value] of normalized) {
+    if (byKey.has(key)) continue;
     next.push({
       key,
       value,
       fromTemplate: false,
       fromEnv: true,
-      sensitive: isSensitiveEnvKey(key),
+      sensitive: isSensitiveEnvKey(key) || hasUrlCredentials(value),
       status: "extra",
     });
   }
@@ -150,85 +202,169 @@ export function mergeEnvEditorValues(entries: EnvEditorEntry[], values: Record<s
 }
 
 export function parseEnvKeys(content: string): string[] {
-  return content
-    .split("\n")
-    .filter((line) => {
-      const trimmed = line.trim();
-      return trimmed && !trimmed.startsWith("#");
-    })
-    .map((line) => normalizeEnvKey(line.split("=")[0].trim()))
-    .filter(Boolean);
+  return unique(parseEnvRecords(content).flatMap((record) => record.key ? [record.key] : []));
 }
 
 export function parseEnvPairs(content: string): Record<string, string> {
-  const pairs: Record<string, string> = {};
-  for (const line of content.split("\n")) {
-    if (!line.trim() || line.trim().startsWith("#")) continue;
-    const eqIdx = line.indexOf("=");
-    if (eqIdx > 0) {
-      const key = normalizeEnvKey(line.slice(0, eqIdx).trim());
-      let value = line.slice(eqIdx + 1).trim();
-      if (
-        (value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith("'") && value.endsWith("'"))
-      ) {
-        value = value.slice(1, -1);
-      }
-      pairs[key] = value;
-    }
+  const pairs: Record<string, string> = Object.create(null);
+  for (const record of parseEnvRecords(content)) {
+    if (record.key) pairs[record.key] = record.value!;
   }
   return pairs;
 }
 
 export function normalizeEnvKey(key: string): string {
-  return key.replace(/^export\s+/, "").trim();
+  const normalized = key.trim().replace(/^export[ \t]+/, "").trim();
+  return /^[A-Za-z_][A-Za-z0-9_.-]*$/.test(normalized) ? normalized : "";
 }
 
-function serializeEnvEntries(entries: EnvEditorEntry[], templateContent: string, envContent: string): string {
-  const values = new Map(entries.map((entry) => [entry.key, normalizeEnvValue(entry.value)]));
-  const used = new Set<string>();
-  const source = templateContent || envContent;
-  const lines = source.split("\n");
-  const output: string[] = [];
+interface EnvRecord {
+  raw: string;
+  key?: string;
+  value?: string;
+  prefix?: string;
+  suffix?: string;
+  malformed?: boolean;
+}
 
-  for (let index = 0; index < lines.length; index++) {
-    const line = lines[index];
-    if (index === lines.length - 1 && line === "") continue;
-    if (!line.trim() || line.trim().startsWith("#")) {
-      output.push(line);
+function parseEnvRecords(content: string): EnvRecord[] {
+  const records: EnvRecord[] = [];
+  const linePattern = /[^\r\n]*(?:\r\n|\n|\r|$)/y;
+  let offset = 0;
+  while (offset < content.length) {
+    linePattern.lastIndex = offset;
+    const raw = linePattern.exec(content)![0];
+    const line = raw.replace(/(?:\r\n|\n|\r)$/, "");
+    const assignment = /^[ \t\uFEFF]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_.-]*)[ \t]*=[ \t]*/.exec(line);
+    if (!assignment) {
+      records.push({ raw });
+      offset += raw.length;
       continue;
     }
-    const eqIdx = line.indexOf("=");
-    if (eqIdx <= 0) {
-      output.push(line);
-      continue;
+    const prefix = assignment[0];
+    const key = assignment[1];
+    const start = offset + prefix.length;
+    const quote = content[start];
+    if (quote === '"' || quote === "'" || quote === "`") {
+      let end = start;
+      let suffix: string | undefined;
+      while ((end = content.indexOf(quote, end + 1)) !== -1) {
+        linePattern.lastIndex = end + 1;
+        const tail = linePattern.exec(content)![0];
+        if (/^[ \t]*(?:#[^\r\n]*)?(?:\r\n|\n|\r)?$/.test(tail)) {
+          suffix = tail;
+          break;
+        }
+        if (content[end - 1] !== "\\") break;
+      }
+      if (suffix === undefined) {
+        records.push({ raw, malformed: true });
+        offset += raw.length;
+        continue;
+      }
+      let value = content.slice(start + 1, end).replace(/\r\n?/g, "\n");
+      if (quote === '"') value = value.replace(/\\n/g, "\n").replace(/\\r/g, "\r");
+      const next = end + 1 + suffix.length;
+      records.push({ raw: content.slice(offset, next), key, value, prefix, suffix });
+      offset = next;
+    } else {
+      const tail = line.slice(prefix.length);
+      const comment = tail.indexOf("#");
+      const value = (comment < 0 ? tail : tail.slice(0, comment)).trimEnd();
+      records.push({ raw, key, value, prefix, suffix: raw.slice(prefix.length + value.length) });
+      offset += raw.length;
     }
-    const rawKey = line.slice(0, eqIdx).trim();
-    const key = normalizeEnvKey(rawKey);
-    if (!key || !values.has(key)) {
-      output.push(line);
-      continue;
-    }
-    const prefix = rawKey.startsWith("export ") ? "export " : "";
-    output.push(`${prefix}${key}=${values.get(key) || ""}`);
-    used.add(key);
   }
+  return records;
+}
 
+export function serializeEnvEntries(entries: EnvEditorEntry[], source: string): string {
+  if (entries.some(entry => !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(entry.key))) {
+    throw new Error("Invalid environment variable name. The file was not changed.");
+  }
+  const values = new Map<string, string>();
   for (const entry of entries) {
-    if (used.has(entry.key)) continue;
-    output.push(`${entry.key}=${normalizeEnvValue(entry.value)}`);
+    values.set(entry.key, entry.value);
   }
-
-  const compact = output.join("\n").replace(/\n{3,}$/g, "\n\n");
-  return compact.endsWith("\n") ? compact : `${compact}\n`;
+  const records = parseEnvRecords(source);
+  const last = new Map<string, EnvRecord>();
+  for (const record of records) if (record.key) last.set(record.key, record);
+  let output = records.map((record) => {
+    if (!record.key || !values.has(record.key) || last.get(record.key) !== record) return record.raw;
+    const value = values.get(record.key)!;
+    return value === record.value ? record.raw : `${record.prefix}${serializeEnvValue(value)}${record.suffix}`;
+  }).join("");
+  const newline = source.match(/\r\n|\n|\r/)?.[0] || "\n";
+  for (const [key, value] of values) {
+    if (last.has(key)) continue;
+    if (output && !/[\r\n]$/.test(output)) output += newline;
+    output += `${key}=${serializeEnvValue(value)}${newline}`;
+  }
+  if (output !== source && records.some((record) => record.malformed)) {
+    throw new Error("Cannot safely update an environment file with an unterminated or malformed quoted value.");
+  }
+  return output;
 }
 
-function normalizeEnvValue(value: string): string {
-  return value.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n").join("\\n").trim();
+function serializeEnvValue(value: string): string {
+  if (value.includes("\0")) throw new Error("Environment values cannot contain NUL characters.");
+  if (!/[#\r\n]/.test(value) && value.trim() === value && !/^["'`]/.test(value)) return value;
+  // Pick a delimiter absent from the value instead of inventing shell/JSON escapes.
+  const candidates: string[] = [];
+  if (!value.includes('"') && !/\\[nr]/.test(value)) {
+    candidates.push(`"${value.replace(/\r/g, "\\r").replace(/\n/g, "\\n")}"`);
+  }
+  if (!value.includes("'")) candidates.push(`'${value}'`);
+  if (!value.includes("`")) candidates.push(`\`${value}\``);
+  for (const candidate of candidates) {
+    if (parseEnvPairs(`VALUE=${candidate}`).VALUE === value) return candidate;
+  }
+  throw new Error("Environment value cannot be represented safely with dotenv quoting. The file was not changed.");
+}
+
+async function writeEnvFile(path: string, content: string, overwrite: boolean, expectedContent?: string): Promise<void> {
+  const existing = await lstat(path).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  if (existing && !overwrite) {
+    throw Object.assign(new Error("Environment file already exists."), { code: "EEXIST" });
+  }
+  if (existing && !existing.isFile()) throw new Error("Refusing to replace a non-regular environment file.");
+  if (!existing && overwrite && expectedContent !== undefined) {
+    throw new Error("Environment file changed while saving. Reload the editor before saving.");
+  }
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  const handle = await open(temporary, "wx", 0o600);
+  try {
+    await handle.writeFile(content, "utf-8");
+    if (existing) await handle.chmod(existing.mode & 0o777);
+    await handle.sync();
+    await handle.close();
+    if (existing && expectedContent !== undefined && await readFile(path, "utf-8") !== expectedContent) {
+      throw new Error("Environment file changed while saving. Reload the editor before saving.");
+    }
+    if (overwrite) await rename(temporary, path);
+    else await link(temporary, path);
+  } finally {
+    await handle.close();
+    await unlink(temporary).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT") throw error;
+    });
+  }
 }
 
 function isSensitiveEnvKey(key: string): boolean {
-  return /(?:API_?KEY|TOKEN|SECRET|PASSWORD|PRIVATE|CREDENTIAL|AUTH)/i.test(key);
+  return /(?:API_?KEY|TOKEN|SECRET|PASSWORD|PRIVATE|CREDENTIAL|AUTH|CONNECTION_?STRING|DSN)/i.test(key);
+}
+
+function hasUrlCredentials(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return Boolean(url.username || url.password);
+  } catch {
+    return false;
+  }
 }
 
 function unique(values: string[]): string[] {

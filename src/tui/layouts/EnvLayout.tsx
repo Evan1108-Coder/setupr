@@ -121,7 +121,7 @@ export function EnvLayout({ cwd }: EnvLayoutProps) {
     setError(null);
     setMessage(null);
     try {
-      const cleanText = stripTerminalControlInput(text).trim();
+      const cleanText = stripTerminalControlInput(text);
       let nextEntries = entries;
       let changed = 0;
       let selectedKey = selected?.key;

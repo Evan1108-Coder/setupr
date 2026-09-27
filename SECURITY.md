@@ -19,6 +19,12 @@ Never commit API keys, Telegram tokens, OAuth credentials, database files, `.env
 
 Secrets are redacted on a best-effort basis (`redactText`/`redactObject` in `src/core/engine.ts`) before commands, history, and logs are persisted. This targets common token shapes and `NAME=value` credential assignments — it is not a guarantee that no secret will ever reach a log file.
 
+Use `setupr secrets set NAME` without an inline value for hidden input. Inline values may
+remain in shell history or process arguments outside Setupr's control. `secrets get` and
+`secrets export` intentionally reveal plaintext; treat their output and destination files
+as sensitive. The encrypted store and its local key must not be shared together. Back up
+both before rotation, which is not an atomic two-file transaction.
+
 ## Threat Model
 
 Setupr runs real shell commands on your machine with your full user privileges. The command-safety

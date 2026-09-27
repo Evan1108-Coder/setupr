@@ -65,7 +65,7 @@ export function DashboardLayout({ cwd, initialStatus, variant = "dashboard" }: D
 
   const command = variant === "status" ? "setupr status --tui" : "setupr";
   const stack = status?.scan ? buildStack(status.scan) : "collecting";
-  const health = status ? `${status.health.score}/100 ${status.health.label}` : "loading";
+  const health = status ? status.health.score === null ? "N/A" : `${status.health.score}/100 ${status.health.label}` : "loading";
 
   if (isTerminalTooSmall(terminal.width, terminal.height)) {
     return <TooSmallTerminal command={command} width={terminal.width} height={terminal.height} />;
@@ -312,10 +312,10 @@ function ProjectPanel({ status, compact = false }: { status: DashboardStatus; co
 function HealthPanel({ status, compact = false }: { status: DashboardStatus; compact?: boolean }) {
   return (
     <Box flexDirection="column">
-      <Text color={healthColor(status.health.label)} bold>{status.health.score} <Text color={colors.textDim}>/100</Text></Text>
+      <Text color={healthColor(status.health.label)} bold>{status.health.score === null ? "N/A" : <>{status.health.score} <Text color={colors.textDim}>/100</Text></>}</Text>
       <Text color={healthColor(status.health.label)}>{status.health.label}</Text>
       {!compact && <Text color={colors.textDim}>last check {formatAge(status.collectedAt)} ago</Text>}
-      <Text color={colors.success}>{healthBar(status.health.score)}</Text>
+      {status.health.score !== null && <Text color={healthColor(status.health.label)}>{healthBar(status.health.score)}</Text>}
     </Box>
   );
 }
@@ -372,11 +372,12 @@ function TestsPanel({ status }: { status: DashboardStatus }) {
 }
 
 function SecurityPanel({ status }: { status: DashboardStatus }) {
-  const risk = status.security.score >= 90 ? "Low" : status.security.score >= 70 ? "Moderate" : "High";
+  const risk = securityRisk(status.security.score);
+  const scoreColor = status.security.score === null ? colors.textDim : status.security.score >= 90 ? colors.success : status.security.score >= 70 ? colors.warning : colors.error;
   return (
     <Box flexDirection="column">
-      <KVRow label="Score" value={status.security.score} color={status.security.score >= 90 ? colors.success : status.security.score >= 70 ? colors.warning : colors.error} />
-      <KVRow label="Findings" value={status.security.findings} color={status.security.findings > 0 ? colors.warning : colors.success} />
+      <KVRow label="Score" value={status.security.score ?? "N/A"} color={scoreColor} />
+      <KVRow label="Findings" value={status.security.findings ?? "N/A"} color={status.security.findings === null ? colors.textDim : status.security.findings > 0 ? colors.warning : colors.success} />
       <KVRow label="Risk" value={risk} color={statusColor(risk)} />
       {status.security.topFindings.slice(0, 2).map((finding, index) => (
         <Text key={`${finding.title}-${index}`} color={colors.textDim} wrap="truncate">· {finding.title}</Text>
@@ -416,7 +417,7 @@ function CompactDashboardOverview({ status }: { status: DashboardStatus }) {
 }
 
 function CompactStatusOverview({ status }: { status: DashboardStatus }) {
-  const risk = status.security.score >= 90 ? "Low" : status.security.score >= 70 ? "Moderate" : "High";
+  const risk = securityRisk(status.security.score);
   return (
     <Box flexDirection="column">
       <KVRow label="Git" value={status.git.isRepo ? `${status.git.branch || "repo"} · ${status.git.dirtyFiles ? "dirty" : "clean"}` : "no repo"} color={status.git.dirtyFiles ? colors.warning : status.git.isRepo ? colors.success : colors.textDim} />
@@ -616,7 +617,7 @@ function nextActions(status: DashboardStatus): string[] {
   if (!status.dependencies.lockfilePresent && status.dependencies.packageManager) actions.push("Create or sync lockfile");
   if (status.git.isRepo && status.git.dirtyFiles > 0) actions.push("Review uncommitted changes");
   if (status.processes.crashed > 0) actions.push("Inspect crashed process logs");
-  if (status.security.findings > 0) actions.push("Run setupr security scan");
+  if (status.security.score === null || (status.security.findings ?? 0) > 0) actions.push("Run setupr security scan");
   if (actions.length === 0) actions.push("Project state looks good");
   return actions;
 }
@@ -633,6 +634,10 @@ function healthColor(label: DashboardStatus["health"]["label"]) {
   if (label === "good") return colors.success;
   if (label === "warning") return colors.warning;
   return colors.error;
+}
+
+function securityRisk(score: number | null): string {
+  return score === null ? "N/A" : score >= 90 ? "Low" : score >= 70 ? "Moderate" : "High";
 }
 
 function healthBar(score: number): string {
