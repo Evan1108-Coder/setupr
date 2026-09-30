@@ -4,7 +4,8 @@ import { runCommand, runCommandArgs } from "../../executor/index.js";
 import { readGitRemotes, selectGitRemote } from "../../util/gitRemote.js";
 import { existsSync } from "fs";
 import { readFile } from "fs/promises";
-import { join } from "path";
+import { basename, join } from "path";
+import { readProjectJsonFile } from "../../scanner/projectValidation.js";
 import { fileExists, initEnvFile, loadEnvEditorState, mergeEnvEditorValues, parseEnvKeys, parseEnvPairs, saveEnvEditorEntries } from "../../env/index.js";
 import { createSetuprError, printPlainError, classifyCommandFailure } from "../../errors/index.js";
 import { runProjectCommandOperation } from "../../core/operations.js";
@@ -519,7 +520,11 @@ async function cmdEnv(sub: string | undefined, cwd: string, flags: Flags) {
 
 async function cmdInfo(cwd: string) {
   const scan = await scanProject(cwd);
+  const manifest = await readProjectJsonFile(cwd, "package.json");
+  const projectName = typeof manifest?.name === "string" && manifest.name.trim() ? manifest.name : basename(cwd);
   console.log(chalk.blue.bold("\n  Project Info\n"));
+  console.log(`  Project:     ${chalk.white(projectName)}`);
+  console.log(`  Directory:   ${chalk.white(cwd)}`);
   console.log(`  Language:    ${chalk.white(scan.language || "unknown")}`);
   console.log(`  Framework:   ${chalk.white(scan.framework || "none")}`);
   console.log(`  PM:          ${chalk.white(scan.packageManager || "none")}`);

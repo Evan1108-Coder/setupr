@@ -6,6 +6,7 @@ import { parseEnvKeys, parseEnvPairs } from "../env/index.js";
 import { getAvailableModels, getDefaultModel } from "../ai/models.js";
 import { visibleCommands } from "../cli/commandRegistry.js";
 import { scanProject, type ScanResult } from "../scanner/index.js";
+import { readProjectJsonFile } from "../scanner/projectValidation.js";
 import { hasProjectSignals } from "../tui/projectSignals.js";
 import { readRecentHistoryEvents, readRecentLogEvents, readProjectState, type ProjectEvent, type JsonObject } from "../state/project.js";
 import { listManagedProcesses } from "../processes/manager.js";
@@ -77,12 +78,15 @@ export interface DashboardStatus {
 }
 
 export async function collectDashboardStatus(cwd: string): Promise<DashboardStatus> {
-  const projectName = cwd.split("/").filter(Boolean).pop() || "project";
+  const directoryName = cwd.split("/").filter(Boolean).pop() || "project";
   let scan: ScanResult | null = null;
   let scanError: string | undefined;
+  let projectName = directoryName;
 
   try {
     scan = await scanProject(cwd);
+    const manifest = await readProjectJsonFile(cwd, "package.json");
+    if (typeof manifest?.name === "string" && manifest.name.trim()) projectName = manifest.name;
   } catch (err) {
     scanError = humanError(err);
   }

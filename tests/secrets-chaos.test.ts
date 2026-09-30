@@ -38,6 +38,12 @@ describe("Secrets safety with synthetic encrypted fixtures", () => {
     await rm(cwd, { recursive: true, force: true });
   });
 
+  it("lists an initialized but empty store without claiming decryption failed", async () => {
+    await cmdSecrets("list", cwd, {});
+    expect(logs.join("\n")).toContain("No secrets stored.");
+    expect(process.exitCode).not.toBe(1);
+  });
+
   it("round-trips encrypted multiline, hash, quotes, whitespace and literal slash sequences", async () => {
     const values = {
       PRIVATE_KEY: "  synthetic line one\nNOT_A_KEY=part # literal\nlast  ",

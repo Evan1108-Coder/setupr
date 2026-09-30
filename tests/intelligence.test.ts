@@ -6,6 +6,7 @@ import { chdir, cwd, env } from "process";
 import type { ScanResult } from "../src/scanner/index.js";
 import { buildCacheKey, setCache } from "../src/ai/cache.js";
 import { intelligentResponse } from "../src/ai/intelligence.js";
+import { getActiveModel } from "../src/ai/client.js";
 
 const scan: ScanResult = {
   language: "JavaScript",
@@ -60,7 +61,13 @@ describe("AI intelligence tiers", () => {
   });
 
   it("uses cached AI responses before trying a live provider", async () => {
-    const context = "js/react/npm\nctx";
+    const context = JSON.stringify({
+      version: 2,
+      model: getActiveModel().id,
+      contextDSL: "js/react/npm",
+      directorContext: "ctx",
+      messages: [],
+    });
     await setCache(buildCacheKey("explain this weird project", context), "cached explanation", 42);
 
     const result = await intelligentResponse("explain this weird project", scan, "js/react/npm", {

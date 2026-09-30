@@ -25,6 +25,39 @@ async function fixture(env: string, example = "LABEL=\n") {
 }
 
 describe("env TUI integration", () => {
+  it("reveals with a mouse click on the actual Show control", async () => {
+    const secret = "synthetic-test-secret";
+    const cwd = await fixture(`API_KEY=${secret}\n`, "API_KEY=\n");
+    const ui = render(React.createElement(EnvLayout, { cwd }));
+    await vi.waitFor(async () => { await flushTui(); expect(ui.lastFrame()).toContain("Show (Ctrl+R)"); });
+    const lines = ui.lastFrame()!.split("\n");
+    const y = lines.findIndex(line => line.includes("Show (Ctrl+R)"));
+    const x = lines[y].indexOf("Show (Ctrl+R)");
+    ui.write(`\x1b[<0;${x + 1};${y + 1}M`);
+    await flushTui();
+    expect(ui.lastFrame()).toContain(secret);
+    expect(ui.lastFrame()).toContain("Hide (Ctrl+R)");
+  });
+  it("reveals only the editor with Ctrl+R, re-masks on focus loss, and never leaks the empty-field placeholder", async () => {
+    const secret = "private-test-value-9812";
+    const cwd = await fixture(`API_KEY=${secret}\n`, "API_KEY=\n");
+    const ui = render(React.createElement(EnvLayout, { cwd }));
+    await vi.waitFor(async () => { await flushTui(); expect(ui.lastFrame()).toContain("Show (Ctrl+R)"); });
+    expect(ui.lastFrame()).not.toContain(secret);
+    ui.write("\x12");
+    await flushTui();
+    expect(ui.lastFrame()).toContain(secret);
+    expect(ui.lastFrame()).toContain("Hide (Ctrl+R)");
+    ui.write("\t");
+    await flushTui();
+    expect(ui.lastFrame()).not.toContain(secret);
+    ui.unmount();
+    const second = render(React.createElement(EnvLayout, { cwd }));
+    await vi.waitFor(async () => { await flushTui(); expect(second.lastFrame()).toContain("Show (Ctrl+R)"); });
+    second.write("\x05\x15");
+    await flushTui();
+    expect(second.lastFrame()).not.toContain(secret);
+  });
   it("saves a coalesced KEY=value plus Enter after the editor is ready", async () => {
     const cwd = await fixture("API_KEY=\n", "API_KEY=\n");
     const ui = render(React.createElement(EnvLayout, { cwd }));

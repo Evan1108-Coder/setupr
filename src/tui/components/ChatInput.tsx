@@ -1,9 +1,9 @@
 import React, { useState } from "react";
 import { Box, Text } from "ink";
+import Spinner from "ink-spinner";
 import { colors, getBorderStyle } from "../theme.js";
 import { BoundedTextInput } from "./BoundedTextInput.js";
 import type { FocusBounds, FocusState } from "../hooks/useFocusNavigation.js";
-import { stripTerminalControlInput } from "../terminalInput.js";
 
 interface ChatInputProps {
   active: boolean;
@@ -15,6 +15,7 @@ interface ChatInputProps {
   maxLines?: number;
   scrollBounds?: FocusBounds;
   disabled?: boolean;
+  busy?: boolean;
   disabledText?: string;
 }
 
@@ -28,7 +29,8 @@ export function ChatInput({
   maxLines = 4,
   scrollBounds,
   disabled = false,
-  disabledText = "AI is working. Esc pauses, Ctrl+R resumes.",
+  busy = disabled,
+  disabledText = "AI is working. Esc cancels the request.",
 }: ChatInputProps) {
   const [value, setValue] = useState("");
   const focused = focusState === "focused" || active;
@@ -36,7 +38,8 @@ export function ChatInput({
   const inputWidth = Math.max(1, boxWidth - 6);
 
   const handleSubmit = (text: string, meta?: { steer?: boolean }) => {
-    const cleanText = stripTerminalControlInput(text).trim();
+    if (disabled) return;
+    const cleanText = text.trim();
     if (!cleanText) return;
     const slashSteer = cleanText.match(/^\/(?:st|steer)\s+(.+)/i);
     onSubmit(slashSteer?.[1]?.trim() || cleanText, { steer: Boolean(meta?.steer || slashSteer) });
@@ -44,7 +47,7 @@ export function ChatInput({
   };
 
   const handleChange = (text: string) => {
-    setValue(stripTerminalControlInput(text));
+    setValue(text);
   };
 
   return (
@@ -55,24 +58,18 @@ export function ChatInput({
       width={boxWidth}
       flexShrink={0}
     >
-      <Text color={disabled ? colors.textDim : colors.primary}>❯ </Text>
-      {disabled ? (
-        <Box width={inputWidth} minWidth={0} overflow="hidden">
-          <Text color={colors.textDim} wrap="truncate">{disabledText}</Text>
-        </Box>
-      ) : (
-        <BoundedTextInput
+      <Text color={disabled ? colors.accent : colors.primary}>{busy ? <Spinner type="dots" /> : "❯"} </Text>
+      <BoundedTextInput
           value={value}
           onChange={handleChange}
           onSubmit={handleSubmit}
-          focus={focused}
-          placeholder={placeholder}
+          focus={focused && !disabled}
+          placeholder={disabled ? disabledText : placeholder}
           mask={isSensitive ? "•" : undefined}
           width={inputWidth}
           maxLines={maxLines}
           scrollBounds={scrollBounds}
-        />
-      )}
+      />
     </Box>
   );
 }

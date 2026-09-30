@@ -1,16 +1,16 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Box, Text, useApp } from "ink";
-import { intelligentResponse } from "../../ai/intelligence.js";
-import { scanResultToDSL } from "../../ai/dsl.js";
 import { classifyCommandFailure, createSetuprError, fromUnknownError, type SetuprError } from "../../errors/index.js";
 import { runCommand } from "../../executor/index.js";
 import type { ScanResult } from "../../scanner/index.js";
 import { ChatInput } from "../components/ChatInput.js";
 import { Panel } from "../components/Panel.js";
 import { Spinner } from "../components/Spinner.js";
+import { Timeline, type TimelineEvent } from "../components/Timeline.js";
 import { KVRow, MetricText, TooSmallTerminal, TuiFooter, TuiHeader, isTerminalTooSmall, statusColor } from "../components/TuiFrame.js";
 import { useFocusNavigation, type FocusBounds, type FocusItem } from "../hooks/useFocusNavigation.js";
 import { useTerminalSize } from "../hooks/useTerminalSize.js";
+import { usePanelChat } from "../hooks/usePanelChat.js";
 import { hasProjectSignals } from "../projectSignals.js";
 import { colors, icons, layout as tuiLayout } from "../theme.js";
 
@@ -56,7 +56,11 @@ export function UpdateLayout({ scan, cwd }: UpdateLayoutProps) {
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<SetuprError | null>(null);
-  const [chatMessages, setChatMessages] = useState<string[]>([]);
+  const { chatEvents, handleChat, pending: aiPending, label: aiLabel } = usePanelChat({
+    scan,
+    command: "update",
+    context: `Outdated packages: ${packages.map((pkg) => `${pkg.name}: ${pkg.current}→${pkg.latest} (${pkg.type})`).join(", ") || "none"}`,
+  });
   const noProject = !hasProjectSignals(scan);
 
   useEffect(() => {
@@ -67,18 +71,6 @@ export function UpdateLayout({ scan, cwd }: UpdateLayoutProps) {
       setLoading(false);
     });
   }, []);
-
-  const handleChat = useCallback(async (text: string) => {
-    setChatMessages((prev) => [...prev, `You → ${text}`]);
-    const dsl = scanResultToDSL(scan);
-    const outdatedContext = packages.map((pkg) => `${pkg.name}: ${pkg.current}→${pkg.latest} (${pkg.type})`).join(", ");
-    const result = await intelligentResponse(
-      `${text}\n\nOutdated packages: ${outdatedContext || "none"}`,
-      scan,
-      `[UPDATE] ${dsl}`
-    );
-    setChatMessages((prev) => [...prev, `AI → ${result.response}`]);
-  }, [scan, packages]);
 
   const counts = packageCounts(packages);
   const risk = counts.major > 0 ? "High" : counts.minor > 0 ? "Medium" : counts.patch > 0 ? "Low" : "Clean";
@@ -110,7 +102,9 @@ export function UpdateLayout({ scan, cwd }: UpdateLayoutProps) {
           error={error}
           noProject={noProject}
           scan={scan}
-          chatMessages={chatMessages}
+          chatEvents={chatEvents}
+          aiPending={aiPending}
+          aiLabel={aiLabel}
           focus={focus.focusState}
           inputActive={focus.isActive("input")}
           inputBounds={focus.activeItem?.id === "input" ? focus.activeItem.bounds : undefined}
@@ -127,7 +121,9 @@ export function UpdateLayout({ scan, cwd }: UpdateLayoutProps) {
           error={error}
           noProject={noProject}
           scan={scan}
-          chatMessages={chatMessages}
+          chatEvents={chatEvents}
+          aiPending={aiPending}
+          aiLabel={aiLabel}
           focus={focus.focusState}
           inputActive={focus.isActive("input")}
           inputBounds={focus.activeItem?.id === "input" ? focus.activeItem.bounds : undefined}
@@ -209,6 +205,9 @@ function PackagesPanel({
   notice,
   error,
   noProject,
+  chatEvents,
+  aiPending,
+  aiLabel,
   inputActive,
   inputBounds,
   focus,
@@ -216,12 +215,14 @@ function PackagesPanel({
   width,
   height,
 }: UpdateViewProps & { width: number; height: number | string }) {
-  const packageLimit = Math.max(1, layout.mainHeight - layout.inputMaxLines - 7);
+  const chatRows = chatEvents.length ? Math.max(1, Math.min(8, Math.floor((layout.mainHeight - layout.inputHeight - 3) / 2))) : 0;
+  const packageLimit = Math.max(1, layout.mainHeight - layout.inputMaxLines - 7 - chatRows);
   return (
     <Panel title={`Outdated Packages (${packages.length})`} focusState={focus("packages")} width={width} height={height}>
       <Box flexDirection="column" flexGrow={1} minHeight={0}>
-        <Box flexDirection="column" flexGrow={1} overflow="hidden">
-          <TableHeader />
+        <Box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
+          <Box flexDirection="column" flexShrink={0}>
+          {packages.length > 0 && <TableHeader />}
           {loading && (
             <>
               {pendingUpdateRows().slice(0, packageLimit).map((row) => (
@@ -236,9 +237,17 @@ function PackagesPanel({
           {!loading && !noProject && !notice && !error && packages.length === 0 && <Text color={colors.success}>{icons.check} All dependencies up to date.</Text>}
           {packages.slice(0, packageLimit).map((pkg) => <PackageRow key={pkg.name} pkg={pkg} />)}
           {packages.length > packageLimit && <Text color={colors.textDim}>… and {packages.length - packageLimit} more</Text>}
+          </Box>
         </Box>
+        {chatRows > 0 && (
+          <Box height={chatRows} flexShrink={0} overflow="hidden">
+            <Timeline events={chatEvents} maxItems={chatRows} width={Math.max(1, width - 4)} showTime={false} active={inputActive} />
+          </Box>
+        )}
         <ChatInput
           active={inputActive}
+          disabled={aiPending}
+          disabledText={aiLabel}
           focusState={focus("input")}
           onSubmit={onChat}
           placeholder="Proceed with update? Ask about risk, or type a package name..."
@@ -266,15 +275,12 @@ function RiskPanel({ packages, counts, risk, scan, compact = false }: UpdateView
   );
 }
 
-function NoticePanel({ notice, error, chatMessages }: UpdateViewProps) {
+function NoticePanel({ notice, error }: UpdateViewProps) {
   return (
     <Box flexDirection="column">
       {error && <Text color={colors.error} wrap="truncate">● {error.code}</Text>}
       {notice && <Text color={colors.warning} wrap="truncate">△ {notice}</Text>}
       {!error && !notice && <Text color={colors.textDim}>No blocking notices.</Text>}
-      {chatMessages.slice(-4).map((message, index) => (
-        <Text key={`${message}-${index}`} color={message.startsWith("AI") ? colors.primary : colors.accent} wrap="truncate">{message}</Text>
-      ))}
     </Box>
   );
 }
@@ -389,7 +395,9 @@ interface UpdateViewProps {
   error: SetuprError | null;
   noProject: boolean;
   scan: ScanResult;
-  chatMessages: string[];
+  chatEvents: TimelineEvent[];
+  aiPending: boolean;
+  aiLabel: string;
   focus: (id: string) => "focused" | "ancestor" | undefined;
   inputActive: boolean;
   inputBounds?: FocusBounds;

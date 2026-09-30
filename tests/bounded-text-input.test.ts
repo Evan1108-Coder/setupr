@@ -4,11 +4,14 @@ import { cleanup, render, flushTui } from "./helpers/tui.js";
 import stripAnsi from "strip-ansi";
 import stringWidth from "string-width";
 import { BoundedTextInput } from "../src/tui/components/BoundedTextInput.js";
+import { ChatInput } from "../src/tui/components/ChatInput.js";
+import { EnvInput } from "../src/tui/components/EnvInput.js";
+import { PromptCard } from "../src/tui/components/PromptCard.js";
 
 afterEach(cleanup);
 
-// Drives the real BoundedTextInput through Ink's stdin keypress pipeline so the
-// tests exercise the same parseKeypress path that runs in a live terminal.
+// Drive the real component through Ink's stdin emitter, including unflushed
+// bursts and arbitrarily fragmented reads, rather than mocking key flags.
 function mountInput(initial = "", width = 40, options: Partial<React.ComponentProps<typeof BoundedTextInput>> = {}) {
   const state = { value: initial, submitted: null as string | null, steer: false };
   let setExternalValue: (next: string) => void;
@@ -131,10 +134,12 @@ describe("BoundedTextInput key handling", () => {
     input.cleanup();
   });
 
-  it("Fn+Delete also deletes backward (indistinguishable from Backspace post-Ink)", async () => {
-    const input = mountInput();
+  it("Fn+Delete deletes forward and is a no-op at the end", async () => {
+    const input = mountInput("hello");
     await input.ready();
-    await input.type("hello");
+    await input.key(FN_DELETE);
+    expect(input.value).toBe("hello");
+    await input.key(LEFT);
     await input.key(FN_DELETE);
     expect(input.value).toBe("hell");
     input.cleanup();
@@ -331,7 +336,8 @@ describe("BoundedTextInput regressions", () => {
       focus: false, scrollBounds: { x: 3, y: 2, width: 20, height: 4 },
     });
     await input.ready();
-    await input.key("\x1b[<0;5;2M");
+    // The rendered field starts at (1,1); stale layout estimates must not win.
+    await input.key("\x1b[<0;3;1M");
     await input.focus(true);
     await input.key("!");
     expect(input.value).toBe("ab!cd");
@@ -376,7 +382,7 @@ describe("BoundedTextInput regressions", () => {
     expect(input.value).toBe("one !two");
   });
 
-  it.each(["\x1b\x7f", "\x1b[3;3~", "\x1b[3;5~"])("deletes a word using %j through Ink", async (sequence) => {
+  it.each(["\x1b\x7f", "\x1b\b", "\x17"])("deletes a word backward using %j through Ink", async (sequence) => {
     const input = mountInput("one two");
     await input.ready();
     await input.key(sequence);
@@ -477,10 +483,213 @@ describe("BoundedTextInput regressions", () => {
         mask, scrollBounds: { x: 3, y: 2, width: 20, height: 4 },
       });
       await input.ready();
-      await input.key(`\x1b[<0;${mask ? 5 : 6};2M`);
+      await input.key(`\x1b[<0;${mask ? 3 : 4};1M`);
       await input.key("!");
       expect(input.value).toBe("a\u65e5!\u{1f389}b");
       input.cleanup();
     }
+  });
+});
+
+describe("BoundedTextInput raw editing sequences", () => {
+  it.each([BACKSPACE, "\b", "\x1b[127u", "\x1b[8;1u", "\x1b[27;1;127~"])("backward-deletes with %j, not Ink's ambiguous delete flag", async (sequence) => {
+    const input = mountInput("abcd");
+    await input.ready();
+    await input.key(LEFT);
+    await input.key(sequence);
+    expect(input.value).toBe("abd");
+  });
+
+  it.each([FN_DELETE, "\x1b[3;2~", "\x1b[3$", CTRL_D])("forward-deletes with %j at the start and in the middle", async (sequence) => {
+    const input = mountInput("abcd");
+    await input.ready();
+    await input.key(LEFT);
+    await input.key(sequence);
+    expect(input.value).toBe("abc");
+    await input.key("\x01");
+    await input.key(sequence);
+    expect(input.value).toBe("bc");
+  });
+
+  it.each(["\x1b[3;3~", "\x1b[3;5~", "\x1b[3;6~", "\x1b[3^", "\x1bd"])("deletes the next word with %j", async (sequence) => {
+    const input = mountInput("one two three");
+    await input.ready();
+    await input.key("\x01");
+    await input.key("\x1bf");
+    await input.key(sequence);
+    expect(input.value).toBe("one three");
+  });
+
+  it.each(["\x1b[127;3u", "\x1b[127;5u", "\x1b[8;5u", "\x1b[27;5;127~", "\x1b[27;3;8~"])("deletes the previous word with %j", async (sequence) => {
+    const input = mountInput("one two three");
+    await input.ready();
+    await input.key(sequence);
+    expect(input.value).toBe("one two ");
+  });
+
+  it.each([BACKSPACE, "\b", FN_DELETE])("handles held %j across separate, coalesced, and byte-split reads", async (sequence) => {
+    for (const chunks of [Array(15).fill(sequence), [sequence.repeat(15)], [...sequence.repeat(15)]]) {
+      const input = mountInput("abcdefghij");
+      await input.ready();
+      if (sequence === FN_DELETE) await input.key("\x01");
+      for (const chunk of chunks) input.write(chunk);
+      await flushTui();
+      expect(input.value).toBe("");
+      await input.key("ok");
+      expect(input.value).toBe("ok");
+      input.cleanup();
+    }
+  });
+
+  it.each([FN_DELETE, "\x1b[3;5~", "\x1b[127;5u", "\x1b[27;5;127~", "\x1b\x7f"])("preserves %j at every split boundary", async (sequence) => {
+    const expected = sequence === FN_DELETE ? "one wo" : sequence.includes("[3;") ? "one " : "two";
+    for (let split = 1; split < sequence.length; split++) {
+      const input = mountInput("one two");
+      await input.ready();
+      await input.key(LEFT.repeat(3));
+      await input.key(sequence.slice(0, split));
+      await input.key(sequence.slice(split));
+      expect(input.value, `split ${split}`).toBe(expected);
+      input.cleanup();
+    }
+  });
+
+  it("processes text, movement, deletion, and Enter in byte order in one read", async () => {
+    const input = mountInput();
+    await input.ready();
+    await input.key(`abcd${LEFT}${LEFT}${FN_DELETE}${BACKSPACE}XY\r`);
+    expect(input.value).toBe("aXYd");
+    expect(input.submitted).toBe("aXYd");
+  });
+
+  it("handles press/repeat but ignores key-release events", async () => {
+    const input = mountInput("abcdef");
+    await input.ready();
+    await input.key("\x1b[127;1:1u\x1b[127;1:2u\x1b[127;1:3u");
+    expect(input.value).toBe("abcd");
+    await input.key("\x01\x1b[3;1:1~\x1b[3;1:2~\x1b[3;1:3~");
+    expect(input.value).toBe("cd");
+  });
+
+  it.each(["\u{1f389}", "e\u0301", "\u{1f469}\u200d\u{1f4bb}", "\u{1f1e8}\u{1f1f3}", "\u{1f44d}\u{1f3fd}"])("forward-deletes whole grapheme %s in a split sequence", async (glyph) => {
+    const input = mountInput(`a${glyph}b`, 4, { maxLines: 2, mask: "*" });
+    await input.ready();
+    await input.key(LEFT.repeat(2));
+    for (const byte of FN_DELETE) await input.key(byte);
+    expect(input.value).toBe("ab");
+    expect(stripAnsi(input.frame() ?? "")).toBe("*▌*");
+  });
+
+  it("keeps word deletion and movement on grapheme boundaries beside whitespace", async () => {
+    const input = mountInput("one \u0301two");
+    await input.ready();
+    await input.key("\x17");
+    expect(input.value).toBe("one \u0301");
+    await input.key("\x01\x1bf!");
+    expect(input.value).toBe("one! \u0301");
+    await input.key("\x1bd");
+    expect(input.value).toBe("one!");
+  });
+
+  it("keeps editing controls inert inside bracketed paste and resumes outside it in the same read", async () => {
+    const input = mountInput("draft");
+    await input.ready();
+    await input.key(`\x1b[200~A${BACKSPACE}${FN_DELETE}\x17\x1b[127;5u\rB\x1b[201~${BACKSPACE}!`);
+    expect(input.value).toBe("draftA\n!");
+    expect(input.submitted).toBeNull();
+  });
+
+  it("drains editing sequences without applying them while unfocused", async () => {
+    const input = mountInput("draft", 5, { focus: false, maxLines: 2 });
+    await input.ready();
+    await input.key(`${BACKSPACE.repeat(3)}${FN_DELETE}\x17`);
+    await input.key("\x1b[3;");
+    await input.key("5~");
+    expect(input.value).toBe("draft");
+    await input.focus(true);
+    await input.key("!");
+    expect(input.value).toBe("draft!");
+    expect(stripAnsi(input.frame() ?? "").split("\n").every((line) => stringWidth(line) <= 5)).toBe(true);
+  });
+
+  it("preserves tabs in unbracketed pasted text while keeping standalone Tab out of the draft", async () => {
+    const input = mountInput();
+    await input.ready();
+    await input.key("one\ttwo\nthree\tfour");
+    expect(input.value).toBe("one\ttwo\nthree\tfour");
+    await input.key("\t");
+    expect(input.value).toBe("one\ttwo\nthree\tfour");
+    expect(input.submitted).toBeNull();
+  });
+
+  it("normalizes CRLF but does not drop a later Enter after an edit", async () => {
+    const submissions: string[] = [];
+    const input = mountInput("abc", 40, { onSubmit: (value) => { submissions.push(value); } });
+    await input.ready();
+    await input.key("\r");
+    await input.key(FN_DELETE);
+    await input.key("\n");
+    expect(submissions).toEqual(["abc", "abc"]);
+  });
+
+  it("keeps edits stable across every split of a mixed stream", async () => {
+    const stream = `ab\u{1f389}cd${LEFT}${BACKSPACE}${FN_DELETE}XY${LEFT}!`;
+    for (let split = 1; split < stream.length; split++) {
+      const input = mountInput();
+      await input.ready();
+      await input.key(stream.slice(0, split));
+      await input.key(stream.slice(split));
+      expect(input.value, `split ${split}`).toBe("ab\u{1f389}X!Y");
+      input.cleanup();
+    }
+  });
+
+  it("does not replay edits or retain raw listeners after unmount/remount", async () => {
+    const input = mountInput("first");
+    await input.ready();
+    await input.key("\x1b[3;");
+    input.cleanup();
+    const next = mountInput("second");
+    await next.ready();
+    await next.key(BACKSPACE.repeat(2));
+    expect(input.value).toBe("first");
+    expect(next.value).toBe("seco");
+  });
+
+  it("publishes one edit for a coalesced held-key read", async () => {
+    const changes: string[] = [];
+    const input = mountInput("x".repeat(300), 40, { onChange: (value) => { changes.push(value); } });
+    await input.ready();
+    input.write(BACKSPACE.repeat(350));
+    await flushTui();
+    expect(changes).toEqual([""]);
+    await input.key("ok");
+    expect(changes).toEqual(["", "ok"]);
+  });
+});
+
+describe("shared input editing integration", () => {
+  it.each(["chat", "env", "prompt"] as const)("edits and submits %s without changing masking, layout, or reset behavior", async (kind) => {
+    const submissions: string[] = [];
+    const onSubmit = (value: string) => { submissions.push(value); };
+    const ui = render(kind === "chat"
+      ? React.createElement(ChatInput, { active: true, isSensitive: true, width: 40, onSubmit })
+      : kind === "env"
+        ? React.createElement(EnvInput, { varKey: "TEST_VALUE", remainingCount: 1, focusState: "focused", isSensitive: true, width: 40, onSubmit, onSkip: () => {} })
+        : React.createElement(PromptCard, { title: "Test", active: true, sensitiveInput: true, width: 40, onSubmit }));
+    await flushTui();
+    ui.write(`ab\u{1f389}cd${LEFT}${BACKSPACE}${FN_DELETE}XY`);
+    await flushTui();
+    const frame = stripAnsi(ui.lastFrame() ?? "");
+    expect(frame).not.toContain("ab");
+    expect(frame).not.toContain("XY");
+    expect(frame).not.toContain("\\u{");
+    expect(frame.split("\n").every((line) => stringWidth(line) <= 40)).toBe(true);
+    ui.write("\r");
+    await flushTui();
+    expect(submissions).toEqual(["ab\u{1f389}XY"]);
+    ui.write("fresh\r");
+    await flushTui();
+    expect(submissions).toEqual(["ab\u{1f389}XY", "fresh"]);
   });
 });

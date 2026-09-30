@@ -4,6 +4,89 @@ import { createTerminalControlInputStripper, parseSgrMouse, stripTerminalControl
 
 const esc = "\x1b";
 
+describe("ordered terminal editing events", () => {
+  it("retains coalesced edits in order without returning controls as text", () => {
+    const consumer = createTerminalControlInputStripper();
+    const result = consumer.read(`ab\x7f\b${esc}[3~${esc}[3~c`);
+    expect(result.text).toBe("abc");
+    expect(result.events).toEqual([
+      { type: "text", text: "ab", paste: false },
+      { type: "key", key: "delete-backward" },
+      { type: "key", key: "delete-backward" },
+      { type: "key", key: "delete-forward" },
+      { type: "key", key: "delete-forward" },
+      { type: "text", text: "c", paste: false },
+    ]);
+  });
+
+  it.each([
+    [`${esc}[3~`, "delete-forward"],
+    [`${esc}[3;3~`, "delete-word-after"],
+    [`${esc}[3;5~`, "delete-word-after"],
+    [`${esc}\x7f`, "delete-word-before"],
+    [`${esc}\b`, "delete-word-before"],
+    [`${esc}[127;5u`, "delete-word-before"],
+    [`${esc}[27;3;127~`, "delete-word-before"],
+    [`${esc}[1;5D`, "word-left"],
+    [`${esc}OF`, "end"],
+    [`${esc}[13;5u`, "steer"],
+  ])("decodes %j at every read boundary", (sequence, key) => {
+    for (let split = 1; split < sequence.length; split++) {
+      const consumer = createTerminalControlInputStripper();
+      const first = consumer.read(sequence.slice(0, split));
+      const last = consumer.read(sequence.slice(split));
+      expect([...first.events, ...last.events], `split ${split}`).toEqual([{ type: "key", key }]);
+      expect(first.text + last.text).toBe("");
+    }
+  });
+
+  it("emits repeats but not releases, malformed events, or unrelated terminal reports", () => {
+    const consumer = createTerminalControlInputStripper();
+    const result = consumer.read(`${esc}[3;1:1~${esc}[3;1:2~${esc}[3;1:3~${esc}[127;1:3u${esc}[3;1:9~${esc}[3;0~${esc}[3;999999999999999999999~${esc}[?3;5u`);
+    expect(result.events).toEqual([
+      { type: "key", key: "delete-forward" },
+      { type: "key", key: "delete-forward" },
+    ]);
+    expect(result.text).toBe("");
+  });
+
+  it("does not turn overlong truncated CSI parameters into editing keys", () => {
+    const consumer = createTerminalControlInputStripper();
+    const result = consumer.read(`${esc}[${"0".repeat(127)}3${"0".repeat(200)}~ok`);
+    expect(result.events).toEqual([{ type: "text", text: "ok", paste: false }]);
+  });
+
+  it.each([`${esc}[5H`, `${esc}[5A`, `${esc}O~`])("does not interpret non-keyboard report %j as an editing command", (sequence) => {
+    expect(createTerminalControlInputStripper().read(sequence).events).toEqual([]);
+  });
+
+  it("does not interpret key-shaped payloads inside paste, OSC, DCS, or X10 reports", () => {
+    for (const [start, end, expected] of [
+      [`${esc}[200~`, `${esc}[201~`, "ab"],
+      [`${esc}]0;`, "\x07", ""],
+      [`${esc}P`, `${esc}\\`, ""],
+    ]) {
+      const consumer = createTerminalControlInputStripper();
+      const chunks = [...`${start}a\x7f\b\x17${esc}[3~${esc}[127;5ub${end}`].map((char) => consumer.read(char));
+      expect(chunks.flatMap((chunk) => chunk.events).filter((event) => event.type === "key")).toEqual([]);
+      expect(chunks.map((chunk) => chunk.text).join("")).toBe(expected);
+      expect(consumer.read("\x7f").events).toEqual([{ type: "key", key: "delete-backward" }]);
+    }
+    const consumer = createTerminalControlInputStripper();
+    expect(consumer.read(`${esc}[M\x7f\b\x17`).events).toEqual([]);
+  });
+
+  it("distinguishes text on either side of a bracketed paste in the same read", () => {
+    const consumer = createTerminalControlInputStripper();
+    expect(consumer.read(`a${esc}[200~b\r${esc}[201~\x7fc`).events).toEqual([
+      { type: "text", text: "a", paste: false },
+      { type: "text", text: "b\n", paste: true },
+      { type: "key", key: "delete-backward" },
+      { type: "text", text: "c", paste: false },
+    ]);
+  });
+});
+
 describe("terminal control input handling", () => {
   it("preserves pasted text with guards split at every byte boundary", () => {
     const paste = `${esc}[200~\u65e5\u672c\u{1f389}\r\nsecond${esc}[201~`;

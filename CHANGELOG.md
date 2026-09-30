@@ -73,11 +73,23 @@ All notable changes to Setupr will be documented in this file. Setupr keeps a ch
 
 ## Unreleased
 
+- Add `--explain` for post-command AI explanations on stderr, preserving original output and exit status, with bounded requests and secret filtering. Credential/configuration commands never forward their output.
+- Render AI replies with Markdown headings, emphasis, lists, code, and word-aware wrapping; keep the transcript adjacent to the bottom input and animate pending requests.
+- Add clickable Show/Hide and Ctrl+R to sensitive env fields; automatically hide on focus/field changes, resize, or after 30 seconds. Prevent cleared sensitive fields from revealing their old value as a placeholder.
+- Initialize chat's env/service summary from actual project data; use measured input coordinates for mouse editing.
+- Treat an initialized, empty project secret store as empty rather than a decryption failure.
+
 ### Fixed
+- Distinguish Backspace/Delete from forward-delete (Fn+Delete or Ctrl+D), support repeated/coalesced and split editing sequences, and preserve Unicode graphemes, masked values, mouse filtering, and bracketed paste.
+- Repaint full-screen TUIs by changed rows instead of clearing the entire terminal on every render. Terminal backgrounds and alternate-screen restoration remain terminal-controlled.
+- Show AI request progress and elapsed time in setup, chat, doctor, start, and update. Prevent overlapping sends, cancel the active reply with Escape, clear failed requests, and ignore late results from cancelled requests.
+- Bound conversational AI requests to 60 seconds across the selected model and at most two fallback models. Provider calls and rate/backoff waits honor cancellation; a hung transport cannot evade its deadline.
+- Handle multipart provider answers, remove reasoning envelopes from displayed answers, and report empty/reasoning-only responses as errors instead of accepting them as completed replies. Conversational cache entries include the model and recent history.
+- Keep full setup/chat replies reachable through transcript scrolling rather than truncating each message to three lines. Preserve multiline content and wrap by terminal-cell width.
 - TUI text input no longer leaks bracketed-paste markers: pasting (Cmd+V) into the chat or `.env` editor previously inserted literal `[200~`/`[201~` around the pasted text. The input sanitizer only stripped these guards when they still carried their leading escape byte, but Ink consumes that byte first, so the bare markers leaked. Both forms (and split-across-chunk partials) are now stripped, while ordinary bracket text such as `arr[200]=x` is preserved.
 - The `.env` editor's "paste KEY=value lines to update several variables at once" now works: a multi-line paste previously collapsed into a single concatenated value (e.g. `API_KEY=…DATABASE_URL=…PORT=…`) because terminals deliver pasted line breaks as carriage returns, which were dropped as control characters before being converted to newlines. Carriage returns are now normalized to newlines first, so each pasted line becomes its own variable.
 - The `setupr dashboard` footer advertised a `? help` shortcut that had no handler (pressing `?` did nothing) and omitted the working `q` quit shown on every other screen; the footer now correctly advertises `q quit`.
-- TUI text input now deletes correctly: Backspace (and Fn+Delete) removes the character before the cursor instead of doing nothing. macOS Backspace sends `0x7f`, which Ink reports as `delete`; this was being routed to a forward delete, so it was a no-op at the end of a line. Forward delete remains available via Ctrl+D.
+- TUI text input now deletes correctly: Backspace (the Mac Delete key) removes the character before the cursor. macOS Backspace sends `0x7f`, which Ink reports as `delete`; this was previously routed incorrectly. Fn+Delete and Ctrl+D delete the next character.
 - TUI text input no longer drops, scrambles, or appears to insert stray spaces between characters during fast typing or pastes. The component now tracks the live value/cursor synchronously instead of reading stale state between keystrokes, so a rapid burst types exactly what was entered, in order. This also fixes the input/border "squish" where overflowing garbled text broke the panel layout.
 - `setupr port <value>` now validates its argument and rejects non-numeric or out-of-range ports (must be an integer 1–65535) instead of reporting them as "available"; this also removes a raw-string interpolation into the underlying `lsof`/`netstat` command.
 - Error messages now show the directory the command actually targeted (e.g. via `--cwd`) instead of Setupr's own working directory; the top-level handler's fallback context no longer overwrites accurate, command-specific error fields.

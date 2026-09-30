@@ -85,11 +85,23 @@ npm run build     # Build the npm package entrypoint
 npm run smoke:fixtures # Exercise representative CLI fixtures
 npm run smoke:fixtures:tui # Include real pseudo-terminal doctor/env interactions (requires expect)
 npm run smoke:chaos # Run the real CLI across deliberately healthy and broken projects
+npm run smoke:package # Install and run the packed package in a clean temporary directory
 npm run fixtures:create -- ../Setupr-Testing/my-new-run # Keep reusable projects for manual testing
 ```
 
 See [Testing](docs/TESTING.md) for the fixture matrix, isolation rules, and verification limits.
 `npm pack` runs a fresh build through `prepack`; never publish an unverified or stale `dist/`.
+
+## Releasing to npm
+
+Setupr publishes `@evan-coder/setupr` from `.github/workflows/release.yml` using npm Trusted Publishing, not a long-lived access token. Before the first workflow release, the npm package owner must add a GitHub Actions trusted publisher for owner `Evan1108-Coder`, repository `setupr`, and workflow file `release.yml` in the package's npm settings. The npm repository name should match the spelling shown in GitHub's repository settings.
+
+1. Merge the intended source and version into `master`, then wait for CI to pass. The package version must be new on npm.
+2. Run `npm run typecheck`, `npm run lint`, `npm test`, and `npm run smoke:package` locally. Review `npm publish --dry-run` and the changelog.
+3. Create and publish a GitHub Release from that tested commit with tag `v<package.json version>` (for example `v1.0.6`). Publishing the release runs the workflow, which repeats the gates and publishes to npm with provenance.
+4. Check the workflow result, then verify `npm view @evan-coder/setupr version` and run `npx --yes @evan-coder/setupr@<version> --version` from outside this repository.
+
+Do not publish a GitHub Release before the trusted publisher is configured; the release workflow will fail authentication. Do not paste npm tokens into chat, source control, or workflow files.
 
 ## Code Style
 

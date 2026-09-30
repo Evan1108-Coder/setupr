@@ -24,6 +24,7 @@ export interface CommandEntry {
 }
 
 export const GLOBAL_OPTIONS: CommandOption[] = [
+  { name: "--explain", summary: "Run in plain mode, then explain the result with AI on stderr (no automatic fixes)." },
   { name: "--plain, --no-tui", summary: "Use non-interactive plain terminal output." },
   { name: "--json", summary: "Emit machine-readable JSON where supported." },
   { name: "--tui", summary: "Prefer a rich TUI when the command has one." },

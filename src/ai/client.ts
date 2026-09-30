@@ -10,6 +10,8 @@ import {
 } from "./models.js";
 import { withRetry, acquireRateToken } from "./retry.js";
 import { loadConfig } from "../state/config.js";
+import { throwIfAborted, withCancellation } from "./cancellation.js";
+import { extractVisibleAnswer } from "./response.js";
 
 const clients = new Map<AIProvider, { apiKey: string; client: OpenAI }>();
 
@@ -55,15 +57,18 @@ export interface ChatOptions {
   stream?: boolean;
   timeoutMs?: number;
   maxRetries?: number;
+  signal?: AbortSignal;
+  onProgress?: (message: string) => void;
 }
 
 interface AnthropicResponse {
   content?: Array<{ type?: string; text?: string }>;
+  stop_reason?: string;
   usage?: { input_tokens?: number; output_tokens?: number };
 }
 
 interface GoogleResponse {
-  candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+  candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> }; finishReason?: string }>;
   usageMetadata?: { totalTokenCount?: number };
 }
 
@@ -71,6 +76,7 @@ export async function chat(
   messages: ChatMessage[],
   options?: ChatOptions
 ): Promise<{ content: string; tokens: number; model: string }> {
+  throwIfAborted(options?.signal);
   const modelId = options?.model || getModel();
   const model = resolveModel(modelId) || getDefaultModel();
   const client = getClientForProvider(model.provider);
@@ -82,12 +88,12 @@ export async function chat(
     );
   }
 
-  const config = await loadConfig();
-
-  await acquireRateToken(model.provider);
+  const config = await withCancellation(() => loadConfig(), { signal: options?.signal });
 
   return withRetry(
     async (signal) => {
+      await acquireRateToken(model.provider, { signal, onProgress: options?.onProgress });
+      throwIfAborted(signal);
       const opts: ChatOptions = {
         ...options,
         timeoutMs: options?.timeoutMs ?? config.ai.timeoutMs,
@@ -107,6 +113,8 @@ export async function chat(
       maxRetries: options?.maxRetries ?? config.ai.maxRetries,
       baseDelayMs: config.ai.retryDelayMs,
       timeoutMs: options?.timeoutMs ?? config.ai.timeoutMs,
+      signal: options?.signal,
+      onProgress: options?.onProgress,
     }
   );
 }
@@ -129,11 +137,11 @@ async function chatOpenAICompatible(
     signal,
   });
 
-  const choice = response.choices[0];
+  const choice = response.choices?.[0];
   const usage = response.usage;
 
   return {
-    content: choice?.message?.content || "",
+    content: extractVisibleAnswer(choice?.message?.content, model.id, choice?.finish_reason),
     tokens: (usage?.prompt_tokens || 0) + (usage?.completion_tokens || 0),
     model: model.id,
   };
@@ -169,7 +177,7 @@ async function chatAnthropic(
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify(body),
-    signal: signal || (options?.timeoutMs ? AbortSignal.timeout(options.timeoutMs) : undefined),
+    signal,
   });
 
   if (!response.ok) {
@@ -178,7 +186,11 @@ async function chatAnthropic(
   }
 
   const data = await response.json() as AnthropicResponse;
-  const content = data.content?.[0]?.text || "";
+  const content = extractVisibleAnswer(
+    data.content?.filter((block) => block.type === "text" && typeof block.text === "string").map((block) => block.text).join("\n"),
+    model.id,
+    data.stop_reason
+  );
   const inputTokens = data.usage?.input_tokens || 0;
   const outputTokens = data.usage?.output_tokens || 0;
 
@@ -216,7 +228,7 @@ async function chatGoogle(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-    signal: signal || (options?.timeoutMs ? AbortSignal.timeout(options.timeoutMs) : undefined),
+    signal,
   });
 
   if (!response.ok) {
@@ -225,7 +237,12 @@ async function chatGoogle(
   }
 
   const data = await response.json() as GoogleResponse;
-  const content = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+  const candidate = data.candidates?.[0];
+  const content = extractVisibleAnswer(
+    candidate?.content?.parts?.filter((part) => !part.thought && typeof part.text === "string").map((part) => part.text).join("\n"),
+    model.id,
+    candidate?.finishReason
+  );
   const totalTokens = data.usageMetadata?.totalTokenCount || 0;
 
   return { content, tokens: totalTokens, model: model.id };

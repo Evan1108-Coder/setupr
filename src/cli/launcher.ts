@@ -4,6 +4,7 @@ import { App, type TUICommand } from "../tui/App.js";
 import { createAppStore } from "../state/store.js";
 import { scanProject } from "../scanner/index.js";
 import { collectDashboardStatus, createDashboardFallbackStatus, type DashboardStatus } from "../status/collector.js";
+import { createFullscreenOutput } from "./fullscreenOutput.js";
 
 interface LaunchOptions {
   cleanMode?: "deps" | "share" | "all";
@@ -30,27 +31,32 @@ export async function launchTUI(
     dashboardStatus = await collectDashboardStatusForTui(cwd);
   }
 
-  const restoreStdout = stripScrollbackClear();
-
-  const { waitUntilExit } = render(
-    React.createElement(App, {
-      command,
-      cwd,
-      store,
-      cleanMode: options?.cleanMode || "deps",
-      force: options?.force || false,
-      dashboardStatus,
-      chatInitialMessage: options?.chatInitialMessage,
-      chatStartNew: options?.chatStartNew,
-      chatResume: options?.chatResume,
-    }),
-    { exitOnCtrlC: true }
-  );
-
+  const output = createFullscreenOutput(process.stdout);
+  let instance: ReturnType<typeof render> | undefined;
   try {
-    await waitUntilExit();
+    instance = render(
+      React.createElement(App, {
+        command,
+        cwd,
+        store,
+        cleanMode: options?.cleanMode || "deps",
+        force: options?.force || false,
+        dashboardStatus,
+        chatInitialMessage: options?.chatInitialMessage,
+        chatStartNew: options?.chatStartNew,
+        chatResume: options?.chatResume,
+      }),
+      // Ink 5's debug mode supplies whole frames without clearTerminal or its
+      // separate log-update cache. The adapter owns diffing and cursor movement.
+      { exitOnCtrlC: true, stdout: output.stdout, debug: output.debug }
+    );
+    await instance.waitUntilExit();
   } finally {
-    restoreStdout();
+    try {
+      instance?.unmount();
+    } finally {
+      output.dispose();
+    }
   }
 }
 
@@ -59,28 +65,4 @@ async function collectDashboardStatusForTui(cwd: string): Promise<DashboardStatu
     setTimeout(() => resolve(createDashboardFallbackStatus(cwd, "Status probes timed out before TUI render.")), 2500);
   });
   return Promise.race([collectDashboardStatus(cwd), timeout]);
-}
-
-function stripScrollbackClear(): () => void {
-  const originalWrite = process.stdout.write;
-  const escape = String.fromCharCode(27);
-  const scrollbackClear = `${escape}[3J`;
-
-  process.stdout.write = function writeWithoutScrollbackClear(
-    chunk: string | Uint8Array,
-    encodingOrCallback?: BufferEncoding | ((error?: Error | null) => void),
-    callback?: (error?: Error | null) => void
-  ): boolean {
-    const cleanChunk = typeof chunk === "string"
-      ? chunk.split(scrollbackClear).join("")
-      : Buffer.isBuffer(chunk)
-        ? Buffer.from(chunk.toString("utf8").split(scrollbackClear).join(""))
-        : chunk;
-
-    return originalWrite.call(process.stdout, cleanChunk, encodingOrCallback as BufferEncoding, callback);
-  } as typeof process.stdout.write;
-
-  return () => {
-    process.stdout.write = originalWrite;
-  };
 }

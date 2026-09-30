@@ -1,11 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Box, Text, useApp, useInput } from "ink";
+import { Box, Text, useApp } from "ink";
+import { useSafeInput as useInput } from "../terminalInput.js";
 import { collectContext } from "../../context/collector.js";
 import { createProjectEngine } from "../../core/engine.js";
 import { handleDirectorInput } from "../../ai/director.js";
 import { contextToDSL } from "../../ai/dsl.js";
 import { sanitizeForAI } from "../../ai/directorContext.js";
 import { scanProject } from "../../scanner/index.js";
+import { loadEnvEditorState } from "../../env/index.js";
 import { type ChatSessionStatus, deleteChatSession, hydrateChatSession, saveChatSession } from "../../state/chatSession.js";
 import type { AgentPrompt, AppMessage, AppStore, LogEntry, NoticeInfo } from "../../state/store.js";
 import { ChatInput } from "../components/ChatInput.js";
@@ -16,7 +18,7 @@ import { Timeline, type TimelineEvent } from "../components/Timeline.js";
 import { useFocusNavigation, type FocusBounds, type FocusItem } from "../hooks/useFocusNavigation.js";
 import { useAppStore } from "../hooks/useStore.js";
 import { useTerminalSize } from "../hooks/useTerminalSize.js";
-import { parseSgrMouse } from "../terminalInput.js";
+import { useAiRequest } from "../hooks/useAiRequest.js";
 import { colors, icons, layout as tuiLayout } from "../theme.js";
 
 interface ChatLayoutProps {
@@ -62,12 +64,25 @@ export function ChatLayout({ cwd, store, initialMessage, startNew = false }: Cha
 
   const [status, setStatus] = useState<ChatSessionStatus>("idle");
   const [ready, setReady] = useState(false);
-  const [scrollBack, setScrollBack] = useState(0);
   const initialSent = useRef(false);
 
   const persist = useCallback(async (nextStatus: ChatSessionStatus = status, action?: string) => {
     await saveChatSession(cwd, store, { status: nextStatus, lastAction: action }).catch(() => undefined);
   }, [cwd, status, store]);
+  const ai = useAiRequest({
+    onError: (error) => {
+      setStatus("failed");
+      store.getState().setRunning(false);
+      store.getState().addMessage({ role: "assistant", content: `AI request failed: ${error instanceof Error ? sanitizeForAI(error.message) : "unknown error"}. You can send your message again.` });
+      void persist("failed", "chat.error");
+    },
+    onCancel: () => {
+      setStatus("paused");
+      store.getState().setRunning(false);
+      store.getState().addMessage({ role: "system", content: "AI request cancelled. Send a new message, or press Ctrl+R to return to idle." });
+      void persist("paused", "chat.pause");
+    },
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -75,7 +90,11 @@ export function ChatLayout({ cwd, store, initialMessage, startNew = false }: Cha
       if (startNew) {
         await deleteChatSession(cwd).catch(() => undefined);
       } else {
-        await hydrateChatSession(cwd, store).catch(() => null);
+        const restored = await hydrateChatSession(cwd, store).catch(() => null);
+        if (restored?.isRunning) {
+          store.getState().setRunning(false);
+          store.getState().addMessage({ role: "system", content: "The previous chat ended during a request. No request is running now; send your message again to retry." });
+        }
       }
 
       const existingScan = store.getState().scan || await scanProject(cwd);
@@ -85,6 +104,15 @@ export function ChatLayout({ cwd, store, initialMessage, startNew = false }: Cha
       const projectContext = store.getState().context || await collectContext(cwd, existingScan);
       if (cancelled) return;
       store.getState().setContext(projectContext);
+      const env = await loadEnvEditorState(cwd);
+      if (cancelled) return;
+      store.getState().setEnvVars(env.entries.map(entry => ({
+        key: entry.key,
+        value: entry.status === "filled" || entry.status === "extra" ? entry.value : "",
+        status: entry.status === "filled" || entry.status === "extra" ? "auto" : "pending",
+        source: entry.status === "filled" || entry.status === "extra" ? ".env" : undefined,
+      })));
+      store.getState().setServices(existingScan.services.map(name => ({ name, status: "pending" })));
 
       const engine = createProjectEngine({ cwd, command: "chat", mode: "tui" });
       const [history, checkpoints] = await Promise.all([
@@ -111,7 +139,11 @@ export function ChatLayout({ cwd, store, initialMessage, startNew = false }: Cha
       setReady(true);
       await saveChatSession(cwd, store, { status: "idle", lastAction: "chat.boot" }).catch(() => undefined);
     }
-    boot();
+    void boot().catch((error: unknown) => {
+      if (cancelled) return;
+      setStatus("failed");
+      store.getState().addMessage({ role: "system", content: `Could not load project context: ${error instanceof Error ? sanitizeForAI(error.message) : "unknown error"}. Exit and retry after checking the project directory.` });
+    });
     return () => {
       cancelled = true;
     };
@@ -122,18 +154,6 @@ export function ChatLayout({ cwd, store, initialMessage, startNew = false }: Cha
   }, [pendingPrompt, isRunning]);
 
   useInput((input, key) => {
-    const mouse = parseSgrMouse(input);
-    if (mouse?.action === "scroll" && focus.activeId === "conversation") {
-      setScrollBack((current) => Math.max(0, current + (mouse.code === 64 ? 1 : -1)));
-      return;
-    }
-    if (key.escape && (status === "thinking" || status === "running")) {
-      setStatus("paused");
-      store.getState().setRunning(false);
-      store.getState().addMessage({ role: "system", content: "Paused. Press Ctrl+R to resume or type a steering instruction when idle." });
-      void persist("paused", "chat.pause");
-      return;
-    }
     if (key.ctrl && input === "r" && status === "paused") {
       setStatus("idle");
       store.getState().addMessage({ role: "system", content: "Resumed. Send the next message or steering instruction." });
@@ -143,68 +163,53 @@ export function ChatLayout({ cwd, store, initialMessage, startNew = false }: Cha
 
   const submitChat = useCallback(async (text: string, meta?: { steer?: boolean; source?: string }) => {
     if (!text.trim()) return;
-    const role: AppMessage["role"] = meta?.steer ? "steer" : "user";
-    store.getState().addMessage({ role, content: sanitizeForAI(text) });
-    setScrollBack(0);
+    await ai.run(async (request) => {
+      const role: AppMessage["role"] = meta?.steer ? "steer" : "user";
+      store.getState().addMessage({ role, content: sanitizeForAI(text) });
 
-    if (status === "paused" && !meta?.steer) {
-      await persist("paused", "chat.message.queued");
-      return;
-    }
-    if (status === "thinking" || status === "running") {
-      store.getState().addMessage({
-        role: "system",
-        content: "I am already working. Use Esc to pause, then send steering, or wait for the current action to finish.",
-      });
-      await persist(status, "chat.busy");
-      return;
-    }
+      const ambiguousPrompt = maybeCreateAmbiguityPrompt(text, store);
+      if (ambiguousPrompt) {
+        store.getState().setPendingPrompt(ambiguousPrompt);
+        setStatus("awaiting-choice");
+        await persist("awaiting-choice", "prompt.ask");
+        return;
+      }
 
-    const ambiguousPrompt = maybeCreateAmbiguityPrompt(text, store);
-    if (ambiguousPrompt) {
-      store.getState().setPendingPrompt(ambiguousPrompt);
-      setStatus("awaiting-choice");
-      await persist("awaiting-choice", "prompt.ask");
-      return;
-    }
+      const state = store.getState();
+      const activeScan = state.scan || scan;
+      const activeContext = state.context || context;
+      if (!activeScan || !activeContext) {
+        store.getState().addMessage({
+          role: "assistant",
+          content: "I am still loading project context. Try again in a moment.",
+        });
+        await persist("idle", "chat.context.missing");
+        return;
+      }
 
-    const state = store.getState();
-    const activeScan = state.scan || scan;
-    const activeContext = state.context || context;
-    if (!activeScan || !activeContext) {
-      store.getState().addMessage({
-        role: "assistant",
-        content: "I am still loading project context. Try again in a moment.",
-      });
-      await persist("idle", "chat.context.missing");
-      return;
-    }
-
-    setStatus("thinking");
-    store.getState().setRunning(true);
-    await persist("thinking", meta?.steer ? "chat.steer" : "chat.message");
-    try {
-      const result = await handleDirectorInput({
-        text,
-        cwd,
-        scan: activeScan,
-        contextDSL: contextToDSL(activeContext),
-        store,
-      });
-      const nextStatus = statusFromPromptOrRunning(store.getState().pendingPrompt, false, "idle");
-      setStatus(nextStatus);
-      await persist(nextStatus, result.action);
-    } catch (err) {
-      setStatus("failed");
-      store.getState().addMessage({
-        role: "assistant",
-        content: `I hit an internal chat error: ${err instanceof Error ? sanitizeForAI(err.message) : "unknown error"}`,
-      });
-      await persist("failed", "chat.error");
-    } finally {
-      store.getState().setRunning(false);
-    }
-  }, [context, cwd, persist, scan, status, store]);
+      setStatus("thinking");
+      store.getState().setRunning(true);
+      await persist("thinking", meta?.steer ? "chat.steer" : "chat.message");
+      try {
+        request.signal.throwIfAborted();
+        const result = await handleDirectorInput({
+          text,
+          cwd,
+          scan: activeScan,
+          contextDSL: contextToDSL(activeContext),
+          store,
+          ...request,
+        });
+        request.signal.throwIfAborted();
+        const nextStatus = statusFromPromptOrRunning(store.getState().pendingPrompt, false, "idle");
+        store.getState().setRunning(false);
+        setStatus(nextStatus);
+        await persist(nextStatus, result.action);
+      } finally {
+        if (!request.signal.aborted) store.getState().setRunning(false);
+      }
+    });
+  }, [context, cwd, persist, scan, store, ai.run]);
 
   const handlePromptSubmit = useCallback((value: string, option?: { id: string }) => {
     const prompt = store.getState().pendingPrompt;
@@ -236,12 +241,6 @@ export function ChatLayout({ cwd, store, initialMessage, startNew = false }: Cha
   }, [initialMessage, ready, submitChat]);
 
   const events = useMemo(() => buildChatEvents(messages, logs, notices), [logs, messages, notices]);
-  const visibleEvents = useMemo(() => {
-    if (scrollBack <= 0) return events;
-    const maxGroups = Math.max(1, layout.transcriptHeight - 1);
-    const end = Math.max(0, events.length - scrollBack);
-    return events.slice(Math.max(0, end - maxGroups), end);
-  }, [events, layout.transcriptHeight, scrollBack]);
 
   if (isTerminalTooSmall(terminal.width, terminal.height)) {
     return <TooSmallTerminal command="setupr chat" width={terminal.width} height={terminal.height} />;
@@ -254,7 +253,7 @@ export function ChatLayout({ cwd, store, initialMessage, startNew = false }: Cha
         <StackedChat
           layout={layout}
           focus={focus.focusState}
-          events={visibleEvents}
+          events={events}
           steps={steps}
           status={status}
           scan={scan}
@@ -264,13 +263,14 @@ export function ChatLayout({ cwd, store, initialMessage, startNew = false }: Cha
           inputActive={focus.isActive("input")}
           inputBounds={focus.activeItem?.id === "input" ? focus.activeItem.bounds : undefined}
           onChat={submitChat}
+          chatProgress={ai.pending ? ai.label : undefined}
           onPromptSubmit={handlePromptSubmit}
         />
       ) : (
         <WideChat
           layout={layout}
           focus={focus.focusState}
-          events={visibleEvents}
+          events={events}
           steps={steps}
           status={status}
           scan={scan}
@@ -280,6 +280,7 @@ export function ChatLayout({ cwd, store, initialMessage, startNew = false }: Cha
           inputActive={focus.isActive("input")}
           inputBounds={focus.activeItem?.id === "input" ? focus.activeItem.bounds : undefined}
           onChat={submitChat}
+          chatProgress={ai.pending ? ai.label : undefined}
           onPromptSubmit={handlePromptSubmit}
         />
       )}
@@ -340,7 +341,7 @@ export function buildChatFocusItems(layout: ChatLayoutModel): FocusItem[] {
 }
 
 function Header({ cwd, projectName, status, ready, width }: { cwd: string; projectName: string; status: ChatSessionStatus; ready: boolean; width: number }) {
-  const statusText = ready ? status : "loading";
+  const statusText = ready || status === "failed" ? status : "loading";
   return (
     <TuiHeader
       command="setupr chat"
@@ -385,6 +386,7 @@ function ConversationPanel({
   inputBounds,
   onChat,
   onPromptSubmit,
+  chatProgress,
   width,
   status,
 }: ChatViewProps & { width: number }) {
@@ -393,9 +395,9 @@ function ConversationPanel({
   const maxItems = Math.max(1, layout.transcriptHeight - (pendingPrompt ? layout.inputMaxLines + 5 : layout.inputMaxLines + 2));
   return (
     <Panel title="CONVERSATION" focusState={focus("conversation")} width={width} height={layout.stacked ? layout.transcriptHeight + layout.inputHeight : "100%"}>
-      <Box flexDirection="column" flexGrow={1} minHeight={0}>
-        <Box flexDirection="column" flexGrow={1} overflow="hidden">
-          <Timeline events={events} maxItems={maxItems} width={typeof width === "number" ? width - 4 : 80} emptyText="No chat messages yet." />
+      <Box flexDirection="column" flexGrow={1} flexBasis={0} minHeight={0}>
+        <Box flexDirection="column" flexGrow={1} flexBasis={0} minHeight={0} overflow="hidden">
+          <Timeline fill events={events} maxItems={maxItems} width={typeof width === "number" ? width - 4 : 80} active={focus("conversation") !== undefined} emptyText="No chat messages yet." />
         </Box>
         <Box flexShrink={0}>
           {pendingPrompt ? (
@@ -424,6 +426,7 @@ function ConversationPanel({
               maxLines={layout.inputMaxLines}
               scrollBounds={inputBounds}
               disabled={disabled}
+              disabledText={chatProgress}
             />
           )}
         </Box>
@@ -470,7 +473,7 @@ function StatusPanel({ focus, status, scan, envVars, services, height }: ChatVie
 
 function Footer({ status, width }: { status: ChatSessionStatus; width: number }) {
   const text = status === "thinking" || status === "running"
-    ? "Esc pause AI · Ctrl+R resume · Tab panels · q quit outside input"
+    ? "Esc cancel AI · Tab panels · q quit outside input"
     : "Enter send · Ctrl+Enter or /steer steer · Tab panels · ↑/↓ navigate · q quit outside input";
   return (
     <TuiFooter width={width} left={width < 90 ? text.replace(" · ↑/↓ navigate", "") : text} right={`v${process.env.npm_package_version || "0.0.0"}`} />
@@ -587,5 +590,6 @@ interface ChatViewProps {
   inputActive: boolean;
   inputBounds?: FocusBounds;
   onChat: (text: string, meta?: { steer?: boolean }) => void;
+  chatProgress?: string;
   onPromptSubmit: (value: string, option?: { id: string }) => void;
 }

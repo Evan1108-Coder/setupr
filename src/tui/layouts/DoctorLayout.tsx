@@ -1,18 +1,18 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Box, Text, useApp } from "ink";
 import { collectContext } from "../../context/collector.js";
 import { doctorInsights, type DoctorInsight } from "../../agent/runtime.js";
-import { intelligentResponse } from "../../ai/intelligence.js";
-import { scanResultToDSL } from "../../ai/dsl.js";
 import { classifyCommandFailure, createSetuprError, type SetuprError } from "../../errors/index.js";
 import { runCommand } from "../../executor/index.js";
 import type { ScanResult } from "../../scanner/index.js";
 import { ChatInput } from "../components/ChatInput.js";
 import { Panel } from "../components/Panel.js";
 import { Spinner } from "../components/Spinner.js";
+import { Timeline, type TimelineEvent } from "../components/Timeline.js";
 import { KVRow, TooSmallTerminal, TuiFooter, TuiHeader, isTerminalTooSmall, statusColor } from "../components/TuiFrame.js";
 import { useFocusNavigation, type FocusBounds, type FocusItem } from "../hooks/useFocusNavigation.js";
 import { useTerminalSize } from "../hooks/useTerminalSize.js";
+import { usePanelChat } from "../hooks/usePanelChat.js";
 import { hasProjectSignals } from "../projectSignals.js";
 import { colors, icons, layout as tuiLayout } from "../theme.js";
 
@@ -51,7 +51,11 @@ export function DoctorLayout({ scan, cwd }: DoctorLayoutProps) {
   const [checks, setChecks] = useState<Check[]>([]);
   const [insights, setInsights] = useState<DoctorInsight[]>([]);
   const [done, setDone] = useState(false);
-  const [chatMessages, setChatMessages] = useState<string[]>([]);
+  const { chatEvents, handleChat, pending: aiPending, label: aiLabel } = usePanelChat({
+    scan,
+    command: "doctor",
+    context: `Doctor results: ${checks.map((check) => `${check.label}: ${check.status}${check.detail ? ` (${check.detail})` : ""}`).join(", ")}`,
+  });
 
   useEffect(() => {
     runDiagnostics(scan, cwd, noProject).then(async (results) => {
@@ -61,18 +65,6 @@ export function DoctorLayout({ scan, cwd }: DoctorLayoutProps) {
       setDone(true);
     });
   }, []);
-
-  const handleChat = useCallback(async (text: string) => {
-    setChatMessages((prev) => [...prev, `You → ${text}`]);
-    const dsl = scanResultToDSL(scan);
-    const checksContext = checks.map((check) => `${check.label}: ${check.status}${check.detail ? ` (${check.detail})` : ""}`).join(", ");
-    const result = await intelligentResponse(
-      `${text}\n\nDoctor results: ${checksContext}`,
-      scan,
-      `[DOCTOR] ${dsl}`
-    );
-    setChatMessages((prev) => [...prev, `AI → ${result.response}`]);
-  }, [scan, checks]);
 
   const passCount = checks.filter((check) => check.status === "pass").length;
   const failCount = checks.filter((check) => check.status === "fail").length;
@@ -104,7 +96,9 @@ export function DoctorLayout({ scan, cwd }: DoctorLayoutProps) {
           done={done}
           risk={risk}
           noProject={noProject}
-          chatMessages={chatMessages}
+          chatEvents={chatEvents}
+          aiPending={aiPending}
+          aiLabel={aiLabel}
           focus={focus.focusState}
           inputActive={focus.isActive("input")}
           inputBounds={focus.activeItem?.id === "input" ? focus.activeItem.bounds : undefined}
@@ -119,7 +113,9 @@ export function DoctorLayout({ scan, cwd }: DoctorLayoutProps) {
           done={done}
           risk={risk}
           noProject={noProject}
-          chatMessages={chatMessages}
+          chatEvents={chatEvents}
+          aiPending={aiPending}
+          aiLabel={aiLabel}
           focus={focus.focusState}
           inputActive={focus.isActive("input")}
           inputBounds={focus.activeItem?.id === "input" ? focus.activeItem.bounds : undefined}
@@ -150,7 +146,7 @@ function WideDoctor(props: DoctorViewProps) {
           <EnvironmentPanel scan={props.scan} />
         </Panel>
         <Panel title="AI Diagnosis" focusState={props.focus("ai")} width="100%" flexGrow={1} minHeight={7}>
-          <AIDiagnosis insights={props.insights} risk={props.risk} chatMessages={props.chatMessages} />
+          <AIDiagnosis insights={props.insights} risk={props.risk} />
         </Panel>
       </Box>
     </Box>
@@ -169,7 +165,7 @@ function StackedDoctor(props: DoctorViewProps) {
         <EnvironmentPanel scan={props.scan} compact />
       </Panel>
       <Panel title="AI Diagnosis" focusState={props.focus("ai")} width="100%" height={aiHeight}>
-        <AIDiagnosis insights={props.insights} risk={props.risk} chatMessages={props.chatMessages} />
+        <AIDiagnosis insights={props.insights} risk={props.risk} compact />
       </Panel>
     </Box>
   );
@@ -180,7 +176,9 @@ function DiagnosticsPanel({
   checks,
   done,
   noProject,
-  chatMessages,
+  chatEvents,
+  aiPending,
+  aiLabel,
   focus,
   inputActive,
   inputBounds,
@@ -188,11 +186,13 @@ function DiagnosticsPanel({
   width,
   height,
 }: DoctorViewProps & { width: number; height: number | string }) {
-  const checkLimit = Math.max(1, layout.diagHeight - layout.inputMaxLines - 6);
+  const chatRows = chatEvents.length ? Math.max(1, Math.min(8, Math.floor((layout.diagHeight - layout.inputHeight - 3) / 2))) : 0;
+  const checkLimit = Math.max(1, layout.diagHeight - layout.inputMaxLines - 6 - chatRows);
   return (
     <Panel title="Diagnostics" focusState={focus("diagnostics")} width={width} height={height}>
       <Box flexDirection="column" flexGrow={1} minHeight={0}>
-        <Box flexDirection="column" flexGrow={1} overflow="hidden">
+        <Box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
+          <Box flexDirection="column" flexShrink={0}>
           {checks.slice(0, checkLimit).map((check, index) => (
             <Text key={`${check.label}-${index}`} color={getCheckColor(check.status)} wrap="truncate">
               {getCheckIcon(check.status)} {check.label}{check.detail ? ` - ${check.detail}` : ""}{check.error ? ` (${check.error.code})` : ""}
@@ -205,12 +205,17 @@ function DiagnosticsPanel({
           ))}
           {checks.length > checkLimit && <Text color={colors.textDim}>… {checks.length - checkLimit} more checks</Text>}
           {!done && <Spinner label="Running diagnostics..." />}
-          {chatMessages.slice(-4).map((message, index) => (
-            <Text key={`${message}-${index}`} color={message.startsWith("AI") ? colors.primary : colors.accent} wrap="truncate">{message}</Text>
-          ))}
+          </Box>
         </Box>
+        {chatRows > 0 && (
+          <Box height={chatRows} flexShrink={0} overflow="hidden">
+            <Timeline events={chatEvents} maxItems={chatRows} width={Math.max(1, width - 4)} showTime={false} active={inputActive} />
+          </Box>
+        )}
         <ChatInput
           active={inputActive}
+          disabled={aiPending}
+          disabledText={aiLabel}
           focusState={focus("input")}
           onSubmit={onChat}
           placeholder={noProject ? "Open a project folder, then run doctor again..." : "Ask the doctor a question..."}
@@ -224,6 +229,7 @@ function DiagnosticsPanel({
 }
 
 function CheckGroups({ checks, done, compact = false }: { checks: Check[]; done: boolean; compact?: boolean }) {
+  if (compact) return <Text wrap="truncate" color={colors.textDim}>{done ? `${checks.length} checks: ${checks.filter(c => c.status === "fail").length} failed, ${checks.filter(c => c.status === "warn").length} warnings` : "Checking runtime, dependencies, environment and Git..."}</Text>;
   const groups = [
     { label: "Runtime", match: /runtime|node|python|go|rust|cargo|npm|pnpm|yarn|bun/i },
     { label: "Dependencies", match: /dependencies|package|install|lock/i },
@@ -247,6 +253,7 @@ function CheckGroups({ checks, done, compact = false }: { checks: Check[]; done:
 }
 
 function EnvironmentPanel({ scan, compact = false }: { scan: ScanResult; compact?: boolean }) {
+  if (compact) return <Text wrap="truncate" color={colors.text}>{process.platform} · {process.version} · {scan.packageManager || "no package manager"}</Text>;
   return (
     <Box flexDirection="column">
       <KVRow label="OS" value={`${process.platform} ${process.arch}`} />
@@ -261,7 +268,8 @@ function EnvironmentPanel({ scan, compact = false }: { scan: ScanResult; compact
   );
 }
 
-function AIDiagnosis({ insights, risk, chatMessages }: { insights: DoctorInsight[]; risk: string; chatMessages: string[] }) {
+function AIDiagnosis({ insights, risk, compact = false }: { insights: DoctorInsight[]; risk: string; compact?: boolean }) {
+  if (compact) return <Text wrap="truncate" color={statusColor(risk)}>Risk: {risk}{insights[0] ? ` · ${insights[0].issue}` : " · Waiting for diagnostics"}</Text>;
   return (
     <Box flexDirection="column">
       <KVRow label="Risk level" value={risk} color={statusColor(risk)} />
@@ -274,9 +282,6 @@ function AIDiagnosis({ insights, risk, chatMessages }: { insights: DoctorInsight
         <Text key={insight.issue} color={insight.severity === "error" ? colors.error : insight.severity === "warning" ? colors.warning : colors.info} wrap="truncate">
           {insight.issue}: {insight.fix?.command || insight.explanation}
         </Text>
-      ))}
-      {chatMessages.slice(-2).map((message, index) => (
-        <Text key={`${message}-${index}`} color={message.startsWith("AI") ? colors.primary : colors.accent} wrap="truncate">{message}</Text>
       ))}
     </Box>
   );
@@ -339,8 +344,8 @@ function stackedDoctorHeights(bodyHeight: number) {
     };
   }
   const groupHeight = Math.max(4, Math.min(6, Math.floor(bodyHeight * 0.20)));
-  const envHeight = Math.max(3, Math.min(5, Math.floor(bodyHeight * 0.18)));
-  const aiHeight = Math.max(3, Math.min(7, Math.floor(bodyHeight * 0.18)));
+  const envHeight = Math.max(4, Math.min(5, Math.floor(bodyHeight * 0.18)));
+  const aiHeight = Math.max(4, Math.min(7, Math.floor(bodyHeight * 0.18)));
   return {
     groupHeight,
     diagHeight: Math.max(4, available - groupHeight - envHeight - aiHeight),
@@ -357,7 +362,9 @@ interface DoctorViewProps {
   done: boolean;
   risk: string;
   noProject: boolean;
-  chatMessages: string[];
+  chatEvents: TimelineEvent[];
+  aiPending: boolean;
+  aiLabel: string;
   focus: (id: string) => "focused" | "ancestor" | undefined;
   inputActive: boolean;
   inputBounds?: FocusBounds;

@@ -61,3 +61,22 @@ jobs:
 
       - name: Production dependency audit
         run: npm audit --omit=dev --audit-level=high
+
+  package-smoke:
+    name: Install package (Node 24 and 18)
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - run: npm run smoke:package
+      - run: npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+      - name: Run installed CLI on minimum supported Node
+        run: node scripts/smoke-package.mjs --tarball "$RUNNER_TEMP/evan-coder-setupr-$(node -p 'require("./package.json").version').tgz"

@@ -1,16 +1,16 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Box, Text, useApp } from "ink";
-import { intelligentResponse } from "../../ai/intelligence.js";
-import { scanResultToDSL } from "../../ai/dsl.js";
 import { classifyCommandFailure, createSetuprError, sanitizeSecret, type SetuprError } from "../../errors/index.js";
 import { runCommand } from "../../executor/index.js";
 import type { ScanResult } from "../../scanner/index.js";
 import { ChatInput } from "../components/ChatInput.js";
 import { Panel } from "../components/Panel.js";
 import { Spinner } from "../components/Spinner.js";
+import { Timeline, type TimelineEvent } from "../components/Timeline.js";
 import { KVRow, TooSmallTerminal, TuiFooter, TuiHeader, isTerminalTooSmall, statusColor } from "../components/TuiFrame.js";
 import { useFocusNavigation, type FocusBounds, type FocusItem } from "../hooks/useFocusNavigation.js";
 import { useTerminalSize } from "../hooks/useTerminalSize.js";
+import { usePanelChat } from "../hooks/usePanelChat.js";
 import { hasProjectSignals } from "../projectSignals.js";
 import { colors, icons, layout as tuiLayout } from "../theme.js";
 
@@ -44,7 +44,11 @@ export function StartLayout({ scan, cwd }: StartLayoutProps) {
   const [command, setCommand] = useState<string | null>(null);
   const [error, setError] = useState<SetuprError | null>(null);
   const [output, setOutput] = useState<string[]>([]);
-  const [chatMessages, setChatMessages] = useState<string[]>([]);
+  const { chatEvents, handleChat, pending: aiPending, label: aiLabel } = usePanelChat({
+    scan,
+    command: "start",
+    context: `Project process status: ${status}\nCommand: ${command || "none"}\nRecent output: ${output.slice(-8).join("\n")}`,
+  });
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const noProject = !hasProjectSignals(scan);
 
@@ -92,17 +96,6 @@ export function StartLayout({ scan, cwd }: StartLayoutProps) {
     };
   }, []);
 
-  const handleChat = useCallback(async (text: string) => {
-    setChatMessages((prev) => [...prev, `You → ${text}`]);
-    const dsl = scanResultToDSL(scan);
-    const result = await intelligentResponse(
-      `${text}\n\nProject process status: ${status}\nCommand: ${command || "none"}\nRecent output: ${output.slice(-8).join("\n")}`,
-      scan,
-      `[START] ${dsl}`
-    );
-    setChatMessages((prev) => [...prev, `AI → ${result.response}`]);
-  }, [scan, command, output, status]);
-
   if (isTerminalTooSmall(terminal.width, terminal.height)) {
     return <TooSmallTerminal command="setupr start" width={terminal.width} height={terminal.height} />;
   }
@@ -127,7 +120,9 @@ export function StartLayout({ scan, cwd }: StartLayoutProps) {
           command={command}
           error={error}
           output={output}
-          chatMessages={chatMessages}
+          chatEvents={chatEvents}
+          aiPending={aiPending}
+          aiLabel={aiLabel}
           startedAt={startedAt}
           focus={focus.focusState}
           inputActive={focus.isActive("input")}
@@ -142,7 +137,9 @@ export function StartLayout({ scan, cwd }: StartLayoutProps) {
           command={command}
           error={error}
           output={output}
-          chatMessages={chatMessages}
+          chatEvents={chatEvents}
+          aiPending={aiPending}
+          aiLabel={aiLabel}
           startedAt={startedAt}
           focus={focus.focusState}
           inputActive={focus.isActive("input")}
@@ -209,7 +206,9 @@ function LogPanel({
   command,
   error,
   output,
-  chatMessages,
+  chatEvents,
+  aiPending,
+  aiLabel,
   focus,
   inputActive,
   inputBounds,
@@ -217,11 +216,12 @@ function LogPanel({
   width,
   height,
 }: StartViewProps & { width: number; height: number | string }) {
-  const outputLimit = Math.max(1, layout.logHeight - layout.inputMaxLines - 6);
+  const chatRows = chatEvents.length ? Math.max(1, Math.min(8, Math.floor((layout.logHeight - layout.inputHeight - 3) / 2))) : 0;
+  const outputLimit = Math.max(1, layout.logHeight - layout.inputMaxLines - 6 - chatRows);
   return (
     <Panel title="Log Stream" focusState={focus("logs")} width={width} height={height}>
       <Box flexDirection="column" flexGrow={1} minHeight={0}>
-        <Box flexDirection="column" flexGrow={1} overflow="hidden">
+        <Box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
           {status === "detecting" && <Spinner label="Detecting start command..." />}
           {status === "running" && (
             <>
@@ -252,12 +252,16 @@ function LogPanel({
             </Box>
           )}
           {status === "stopped" && <Text color={colors.warning}>{icons.warning} Process exited</Text>}
-          {chatMessages.slice(-4).map((message, index) => (
-            <Text key={`${message}-${index}`} color={message.startsWith("AI") ? colors.primary : colors.accent} wrap="truncate">{message}</Text>
-          ))}
         </Box>
+        {chatRows > 0 && (
+          <Box height={chatRows} flexShrink={0} overflow="hidden">
+            <Timeline events={chatEvents} maxItems={chatRows} width={Math.max(1, width - 4)} showTime={false} active={inputActive} />
+          </Box>
+        )}
         <ChatInput
           active={inputActive}
+          disabled={aiPending}
+          disabledText={aiLabel}
           focusState={focus("input")}
           onSubmit={onChat}
           placeholder="Command (start|stop|restart|logs|follow) or ask about the process..."
@@ -278,7 +282,7 @@ function ProcessRail({ scan, command, status, compact = false }: { scan: ScanRes
       detail: value,
       color: command?.includes(name) ? colors.accent : colors.textDim,
     })),
-    ...scan.services.slice(0, compact ? 2 : 5).map((service) => ({ name: service, detail: "detected", color: colors.success })),
+    ...scan.services.slice(0, compact ? 2 : 5).map((service) => ({ name: service, detail: "detected, not monitored", color: colors.textDim })),
   ];
   return (
     <Box flexDirection="column">
@@ -287,7 +291,7 @@ function ProcessRail({ scan, command, status, compact = false }: { scan: ScanRes
           {row.name === "web" && status === "running" ? icons.arrowRight : icons.dot} {row.name} <Text color={colors.textDim}>{row.detail}</Text>
         </Text>
       ))}
-      {!compact && <Text color={status === "running" ? colors.success : colors.textDim}>{status === "running" ? "all up" : status}</Text>}
+      {!compact && <Text color={colors.textDim}>{status === "running" ? "Command active; health unverified" : status}</Text>}
     </Box>
   );
 }
@@ -308,10 +312,9 @@ function CurrentProcessPanel({ scan, command, status, output, startedAt, compact
 function RestartPolicyPanel({ status }: { status: StartStatus }) {
   return (
     <Box flexDirection="column">
-      <KVRow label="Policy" value="on failure" color={colors.text} />
-      <KVRow label="Max restarts" value="5" />
-      <KVRow label="Auto retry" value={status === "failed" ? "suggested" : "ready"} color={status === "failed" ? colors.warning : colors.success} />
-      <Text color={colors.textDim} wrap="truncate">Use chat input to ask for restart or diagnosis.</Text>
+      <KVRow label="Policy" value="manual" color={colors.text} />
+      <KVRow label="Auto retry" value="off" color={colors.textDim} />
+      <Text color={colors.textDim} wrap="wrap">{status === "failed" ? "Review the failure before restarting." : "This foreground session does not automatically restart commands."}</Text>
     </Box>
   );
 }
@@ -380,7 +383,9 @@ interface StartViewProps {
   command: string | null;
   error: SetuprError | null;
   output: string[];
-  chatMessages: string[];
+  chatEvents: TimelineEvent[];
+  aiPending: boolean;
+  aiLabel: string;
   startedAt: number | null;
   focus: (id: string) => "focused" | "ancestor" | undefined;
   inputActive: boolean;

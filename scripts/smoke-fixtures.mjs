@@ -203,7 +203,7 @@ function tuiSmoke() {
     "  eof { exit 1 }",
     "}",
     "expect {",
-    "  -re \"(setupr doctor|Setupr Doctor|DIAGNOSTICS|ENVIRONMENT)\" {}",
+    "  -re \"(DIAGNOSTICS|ENVIRONMENT)\" {}",
     "  timeout { send \"\\003\"; exit 1 }",
     "  eof { exit 1 }",
     "}",

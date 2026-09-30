@@ -7,7 +7,7 @@ import { launchTUI } from "./launcher.js";
 import { runPlainMode } from "./plain.js";
 import { withInteractiveScreen } from "./terminalScreen.js";
 import { helpPathFromInput, isHelpRequest, showHelp } from "./help.js";
-import { createSetuprError, printPlainError } from "../errors/index.js";
+import { createSetuprError, printPlainError, fromUnknownError } from "../errors/index.js";
 import { knownCommandNames, noSubcommandNames, tuiCommandNames } from "./commandRegistry.js";
 import { runSupervisorFromCli } from "../processes/manager.js";
 import { createProjectEngine, redactCommandArguments, type ProjectEngine } from "../core/engine.js";
@@ -109,6 +109,7 @@ const cli = meow(
       json: { type: "boolean", default: false },
       tui: { type: "boolean", default: false },
       smart: { type: "boolean", default: false },
+      explain: { type: "boolean", default: false },
       dryRun: { type: "boolean", default: false },
       yes: { type: "boolean", default: false },
       fix: { type: "boolean", default: false },
@@ -133,6 +134,36 @@ const cli = meow(
 );
 
 export async function run() {
+  if (!cli.flags.explain || isHelpRequest(cli.input[0] || "dashboard", cli.input, Boolean(cli.flags.help))) return runInner();
+  if (cli.flags.tui) {
+    printPlainError(createSetuprError({ code: "INVALID_FLAG_COMBINATION", command: cli.input[0], details: ["--explain is for plain output; remove --tui."] }));
+    return;
+  }
+  cli.flags.plain = true;
+  const { captureCommandOutput, explainResult } = await import("./explain.js");
+  const capture = captureCommandOutput();
+  let output: string;
+  try {
+    await runInner();
+  } catch (error) {
+    printPlainError(fromUnknownError(error, { command: cli.input[0] || "dashboard" }));
+    process.exitCode = numericExitCode(1) || 1;
+  } finally {
+    output = capture.stop();
+  }
+  const status = process.exitCode;
+  try {
+    const explanation = await explainResult({ command: cli.input[0] || "dashboard", exitCode: numericExitCode(0), output, smart: Boolean(cli.flags.smart), cwd: typeof cli.flags.cwd === "string" ? resolve(cli.flags.cwd) : process.cwd() });
+    // Diagnostics never contaminate structured stdout or pipelines.
+    process.stderr.write(`\n${explanation}\n`);
+  } catch {
+    process.stderr.write("\nAI explanation unavailable. The command result is unchanged.\n");
+  } finally {
+    process.exitCode = status;
+  }
+}
+
+async function runInner() {
   const explicitCommand = cli.input[0];
   if (explicitCommand === "_supervise" && await runSupervisorFromCli(cli.input)) {
     return;

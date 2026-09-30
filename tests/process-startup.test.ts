@@ -29,6 +29,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   cwd = await mkdtemp(join(suiteDir, "project-"));
+  await mkdir(join(cwd, "home"));
 });
 
 afterEach(async () => {
@@ -61,11 +62,16 @@ async function fixture(source: string, script = "node app.cjs", target = "dev") 
 }
 
 function runCli(...args: string[]): Promise<{ code: number; output: string }> {
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: join(cwd, "home"), NO_COLOR: "1" };
+  for (const key of Object.keys(env)) {
+    if (/^(OPENAI|ANTHROPIC|GOOGLE|GROQ|MINIMAX|MOONSHOT|GITHUB|GH_|SETUPR_AI|P_SETUP|AI_)/i.test(key)) delete env[key];
+  }
   return new Promise((resolveResult) => {
     execFile(process.execPath, [cli, ...args, "--cwd", cwd, "--plain"], {
       cwd,
-      timeout: 5_000,
-      env: { ...process.env, NO_COLOR: "1" },
+      // Real npm child startup competes with the full suite's worker processes.
+      timeout: 15_000,
+      env,
     }, (error, stdout, stderr) => {
       resolveResult({ code: error ? (typeof error.code === "number" ? error.code : -1) : 0, output: stdout + stderr });
     });

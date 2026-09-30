@@ -1,5 +1,6 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { Box, Text, useApp, useInput } from "ink";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Box, Text, useApp, type DOMElement } from "ink";
+import { containsTerminalPoint } from "../terminalBounds.js";
 import { loadEnvEditorState, mergeEnvEditorValues, parseEnvPairs, saveEnvEditorEntries, type EnvEditorEntry, type EnvEditorState } from "../../env/index.js";
 import { createSetuprError, errorSummary, fromUnknownError, type SetuprError } from "../../errors/index.js";
 import { Panel } from "../components/Panel.js";
@@ -8,7 +9,7 @@ import { MetricText, TooSmallTerminal, TuiFooter, TuiHeader, isTerminalTooSmall 
 import { useFocusNavigation, type FocusBounds, type FocusItem, type FocusState } from "../hooks/useFocusNavigation.js";
 import { useTerminalSize } from "../hooks/useTerminalSize.js";
 import { colors, getBorderStyle, icons, layout as tuiLayout } from "../theme.js";
-import { parseSgrMouse, stripTerminalControlInput } from "../terminalInput.js";
+import { createTerminalControlInputStripper, parseSgrMouse, stripTerminalControlInput, useSafeInput as useInput } from "../terminalInput.js";
 
 interface EnvLayoutProps {
   cwd: string;
@@ -197,10 +198,11 @@ export function EnvLayout({ cwd }: EnvLayoutProps) {
 
             <Box flexDirection="column" width={layout.stacked ? "100%" : layout.sideWidth} height={layout.stacked ? layout.detailsHeight + layout.editorHeight + tuiLayout.panelGap : "100%"} gap={tuiLayout.panelGap}>
               <Panel title="Details" focusState={focus.focusState("details")} width="100%" height={layout.detailsHeight}>
-                <DetailsPanel state={state} selected={selected} message={message} error={error} />
+                <DetailsPanel state={state} selected={selected} message={message} error={error} compact={layout.stacked} />
               </Panel>
               <Panel title="Editor" focusState={focus.focusState("editor")} width="100%" height={layout.editorHeight}>
                 <EditorPanel
+                  key={selected?.key || "new"}
                   selected={selected}
                   draft={draft}
                   dirty={dirty}
@@ -269,7 +271,11 @@ function VariableList({ entries, offset, selectedIndex }: { entries: EnvEditorEn
   );
 }
 
-function DetailsPanel({ state, selected, message, error }: { state: EnvEditorState; selected: EnvEditorEntry | null; message: string | null; error: SetuprError | null }) {
+function DetailsPanel({ state, selected, message, error, compact = false }: { state: EnvEditorState; selected: EnvEditorEntry | null; message: string | null; error: SetuprError | null; compact?: boolean }) {
+  if (compact) return <Box flexDirection="column" flexShrink={0}>
+    <Text wrap="truncate" color={colors.heading}>{selected?.key || "No variable selected"} · {selected?.status || "empty"}</Text>
+    <Text wrap="truncate" color={error ? colors.error : colors.textDim}>{error ? `${error.code}: ${error.title}` : message || `${state.missing.length} missing/empty · ${state.hasExample ? ".env.example present" : "no template"}`}</Text>
+  </Box>;
   return (
     <Box flexDirection="column">
       <Text color={state.hasEnv ? colors.success : colors.warning}>{state.hasEnv ? "✓ .env present" : "△ .env not loaded"}</Text>
@@ -280,7 +286,7 @@ function DetailsPanel({ state, selected, message, error }: { state: EnvEditorSta
       {selected && <Text color={colors.heading} bold wrap="truncate">{selected.key}</Text>}
       {selected && <Text color={statusColor(selected.status)}>Status: {selected.status}</Text>}
       {selected?.templateValue && <Text color={colors.textDim} wrap="truncate">Template: {selected.sensitive ? maskValue(selected.templateValue) : selected.templateValue}</Text>}
-      {selected?.sensitive && <Text color={colors.warning}>Sensitive value: input is masked.</Text>}
+      {selected?.sensitive && <Text color={colors.warning}>Sensitive value: masked by default.</Text>}
       {message && <Text color={colors.success} wrap="truncate">{message}</Text>}
       {error && <Text color={colors.error} wrap="truncate">{error.code}: {error.title}</Text>}
     </Box>
@@ -356,18 +362,41 @@ function EditorPanel({
   onChange: (value: string) => void;
   onSubmit: (value: string) => void;
 }) {
-  const inputWidth = Math.max(1, width - 4);
+  const inputWidth = Math.max(1, width - 6);
+  const [revealed, setRevealed] = useState(false);
+  const revealButton = useRef<DOMElement>(null);
+  const revealControls = useRef(createTerminalControlInputStripper());
+  useEffect(() => { if (focusState !== "focused") setRevealed(false); }, [focusState]);
+  useEffect(() => {
+    if (!revealed) return;
+    const timer = setTimeout(() => setRevealed(false), 30000);
+    return () => clearTimeout(timer);
+  }, [revealed]);
+  useInput((input, key, raw) => {
+    if (!selected?.sensitive) return;
+    const chunk = revealControls.current.read(raw);
+    if (chunk.paste) return;
+    if ((focusState === "focused" && key.ctrl && input === "r") ||
+      chunk.mouse.some(mouse => mouse.code === 0 && mouse.action === "press" && containsTerminalPoint(revealButton.current, mouse.x, mouse.y))) {
+      setRevealed((value) => !value);
+    }
+  });
   return (
     <Box flexDirection="column" width="100%" height="100%" justifyContent="flex-end">
-      <Box flexGrow={1} flexDirection="column">
-        <Text color={colors.textBright} bold wrap="truncate">{selected ? selected.key : "New variable"}</Text>
-        <Text color={colors.textDim} wrap="wrap">
-          {selected
-            ? "Edit the value below. Paste KEY=value lines to update several variables at once."
-            : "Paste KEY=value lines below to create variables."}
-        </Text>
-        {dirty && <Text color={colors.warning}>Unsaved changes. Press Enter to save.</Text>}
+      <Box flexGrow={1} flexShrink={1} minHeight={0} overflow="hidden" flexDirection="column">
+        <Box flexDirection="column" flexShrink={0}>
+          <Text color={colors.textBright} bold wrap="truncate">{selected ? selected.key : "New variable"}</Text>
+          <Text color={colors.textDim} wrap="wrap">
+            {selected
+              ? "Edit the value below. Paste KEY=value lines to update several variables at once."
+              : "Paste KEY=value lines below to create variables."}
+          </Text>
+          {dirty && <Text color={colors.warning}>Unsaved changes. Press Enter to save.</Text>}
+        </Box>
       </Box>
+      {selected?.sensitive && <Box flexShrink={0} height={1} justifyContent="flex-end">
+        <Box ref={revealButton}><Text color={colors.primary} underline>{revealed ? "Hide" : "Show"} (Ctrl+R)</Text></Box>
+      </Box>}
       <Box borderStyle={getBorderStyle("input")} borderColor={focusState === "focused" ? colors.borderActive : colors.border} paddingX={1} width={Math.max(12, width)} flexShrink={0}>
         <Text color={colors.primary}>{icons.arrowRight} </Text>
         <BoundedTextInput
@@ -375,8 +404,8 @@ function EditorPanel({
           onChange={onChange}
           onSubmit={onSubmit}
           focus={focusState === "focused"}
-          placeholder={selected ? selected.value || "value" : "KEY=value"}
-          mask={selected?.sensitive ? "•" : undefined}
+          placeholder={selected ? "value" : "KEY=value"}
+          mask={selected?.sensitive && !(revealed && focusState === "focused") ? "•" : undefined}
           width={inputWidth}
           maxLines={maxLines}
           scrollBounds={scrollBounds}
@@ -396,8 +425,8 @@ export function buildEnvLayout(width: number, height: number): EnvLayoutGeometry
     const compact = bodyHeight < 20;
     const available = Math.max(8, bodyHeight - gap * 2);
     const editorHeight = compact
-      ? 5
-      : clamp(Math.floor(bodyHeight * 0.34), 6, Math.max(6, Math.floor(bodyHeight * 0.42)));
+      ? 7
+      : clamp(Math.floor(bodyHeight * 0.34), 7, Math.max(7, Math.floor(bodyHeight * 0.42)));
     const inputMaxLines = clamp(Math.floor(editorHeight / 4), 1, 4);
     const detailsHeight = compact
       ? Math.max(3, available - editorHeight - 5)

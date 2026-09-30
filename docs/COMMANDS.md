@@ -2,6 +2,27 @@
 
 Full reference of all Setupr CLI commands.
 
+## Explain a Command Result
+
+Append `--explain` to a plain command to show its normal result first, then request a concise AI explanation:
+
+```bash
+setupr info --explain
+setupr env check --plain --explain
+setupr doctor --plain --explain
+setupr status --json --explain
+```
+
+This flag selects plain output and cannot be combined with `--tui`. The explanation goes to stderr, including with `--json`, so stdout keeps its original format. The original exit status is preserved. Explanations are advisory: they do not run repairs or change files. No provider key, disabled AI, or a failed AI request produces a notice rather than hiding the command result.
+
+One additional provider request is allowed per explanation, with a 30-second timeout and no retries. `--smart` and `chat` do not request a duplicate explanation. `auth`, `secrets`, and `config` never send their output to this feature. The request contains a bounded, redacted command-output excerpt, not an unrestricted project scan. Known provider credentials, sensitive environment values, assignments, credential URLs, and private keys are filtered; review arbitrary custom-script output before sending it to any external provider. Child processes that write directly to inherited file descriptors may not be captured. Watching commands are explained only after they return normally.
+
+## Rich Replies and Secret Reveal
+
+AI replies in TUIs render Markdown headings, bold/italic emphasis, lists, code blocks, and links. Tables become labeled records to stay readable in narrow panels. The pending-message indicator animates; Esc cancels a pending reply. Scroll over the transcript or use PageUp/PageDown to read earlier output. Chat/setup transcripts use the actual space remaining above the bottom-anchored input.
+
+In the env editor, click **Show (Ctrl+R)** or press **Ctrl+R** in the selected sensitive field to reveal it. Click **Hide** or repeat the shortcut to mask it. Leaving the field, selecting another variable, resizing, or waiting 30 seconds masks it again. Revealing is display-only; it does not save a value or expose it in other panels. Masking is not encryption: `.env` files themselves are plaintext.
+
 `status --json` uses `null` for `health.score`, `security.score`, and
 `security.findings` when a security assessment is absent or unavailable. Do not
 interpret missing measurements as a perfect score or zero findings. Plain/TUI
@@ -117,14 +138,25 @@ does not erase an existing `.env`.
 - **Mouse click**: Focus a panel in terminals that support SGR mouse events
 - **Mouse click inside focused input**: Move the text cursor where the terminal reports coordinates accurately
 - **Option/Alt+Arrow**: Move by word where the terminal sends a compatible sequence
+- **Backspace / Mac Delete**: Delete the previous character
+- **Fn+Delete / Ctrl+D**: Delete the next character
 - **Option/Alt+Delete or Ctrl+W**: Delete the previous word
+- **Ctrl+Delete / Option+Fn+Delete**: Delete the next word where supported by the terminal
 - **Ctrl+A / Ctrl+E**: Jump to start/end of input
 - **Ctrl+U / Ctrl+K**: Clear before/after cursor
 - **Enter**: Confirm / submit focused inputs
 - **Esc**: Leave or skip the active input when supported
+- **Esc during an AI reply**: Cancel that reply; this does not cancel an executing setup step or stop a managed process
+- **Mouse wheel over setup/chat transcript / PgUp/PgDn while its panel is focused**: Read earlier or later reply lines
 - **q**: Quit when focus is not inside an input
 
 The TUI runs in the terminal alternate screen, so exiting returns to the original shell history instead of leaving the dashboard printed in the scrollback. It enables SGR mouse reporting and bracketed paste while active, then disables both on cleanup. It does not set a background color; Terminal, iTerm2, Ghostty, and other terminal profiles keep control of their own theme/background. Panels are drawn with Unicode box-drawing characters because terminal UIs render in character cells rather than graphical window primitives. TUIs require at least a `60x18` terminal grid; smaller windows show a resize notice rather than squeezing panels until borders collapse.
+
+Conversational AI requests show the provider/model or retry progress and elapsed time. They have
+a 60-second total budget and try at most two fallback models after a retryable failure. Escape
+cancels the request; send a new message to retry. Completed responses appear when the provider
+returns, not as streamed tokens. Private reasoning is not displayed. A fallback answer identifies
+the model used and does not change the saved default model.
 
 Setupr TUIs share the same terminal-native style: blue uppercase panel titles, thin blue borders, yellow focused borders/actions, green success states, yellow warnings/current work, and red failures. Interactive inputs stay anchored at the bottom of their panel, wrap within the box, and scroll once long input reaches the panel's line cap. If a terminal font/profile leaves visible gaps in thin Unicode box drawing, run with `SETUPR_TUI_BORDER=bold`, `double`, `round`, or `classic`. `setupr clean` opens a safety review first; type `CLEAN` to delete reviewed targets, or use `--force` only when you intentionally want Setupr to skip the review prompt.
 

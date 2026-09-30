@@ -9,6 +9,7 @@ import { Timeline, type TimelineEvent } from "../components/Timeline.js";
 import { useAppStore } from "../hooks/useStore.js";
 import { useFocusNavigation, type FocusBounds, type FocusItem } from "../hooks/useFocusNavigation.js";
 import { useTerminalSize } from "../hooks/useTerminalSize.js";
+import { useAiRequest } from "../hooks/useAiRequest.js";
 import { colors, icons, layout as tuiLayout } from "../theme.js";
 import { hasProjectSignals } from "../projectSignals.js";
 import type { AgentPrompt, AppMessage, AppStore, LogEntry, NoticeInfo } from "../../state/store.js";
@@ -47,6 +48,10 @@ export function SetupLayout({ store }: SetupLayoutProps) {
   const projectName = useAppStore(store, (s) => s.projectName);
 
   const [elapsed, setElapsed] = useState(0);
+  const ai = useAiRequest({
+    onError: (error) => store.getState().addMessage({ role: "assistant", content: `AI request failed: ${sanitizeForAI(error instanceof Error ? error.message : "Unknown error")}. You can retry your message.` }),
+    onCancel: () => store.getState().addMessage({ role: "system", content: "AI reply cancelled. Setup execution was not cancelled; you can send another message." }),
+  });
 
   useEffect(() => {
     const start = store.getState().startTime;
@@ -68,24 +73,29 @@ export function SetupLayout({ store }: SetupLayoutProps) {
   }, [envPromptKey, pendingPrompt]);
 
   const handleChat = useCallback(async (text: string) => {
-    store.getState().addMessage({ role: "user", content: sanitizeForAI(text) });
-    const state = store.getState();
-    if (state.scan && state.context) {
-      const dsl = contextToDSL(state.context);
-      await handleDirectorInput({
-        text,
-        cwd: store.getState().cwd,
-        scan: state.scan,
-        contextDSL: dsl,
-        store,
-      });
-    } else {
-      store.getState().addMessage({
-        role: "assistant",
-        content: "I am still scanning this project. I will use your instruction as soon as the project context is ready.",
-      });
-    }
-  }, [store]);
+    await ai.run(async (request) => {
+      store.getState().addMessage({ role: "user", content: sanitizeForAI(text) });
+      const state = store.getState();
+      if (state.scan && state.context) {
+        const dsl = contextToDSL(state.context);
+        await handleDirectorInput({
+          text,
+          cwd: state.cwd,
+          scan: state.scan,
+          contextDSL: dsl,
+          store,
+          ...request,
+        });
+      } else {
+        store.getState().addMessage({
+          role: "assistant",
+          content: state.scan && !hasProjectSignals(state.scan)
+            ? "No project files were detected in this directory. Open a project folder or run setupr setup --cwd <project-folder>. No instruction has been executed."
+            : "Project context is still loading. Please send your message again when scanning finishes; no instruction has been executed.",
+        });
+      }
+    });
+  }, [store, ai.run]);
 
 	  const handleEnvSubmit = useCallback((value: string) => {
 	    const key = store.getState().envPromptKey;
@@ -178,6 +188,8 @@ export function SetupLayout({ store }: SetupLayoutProps) {
           onPromptSubmit={handlePromptSubmit}
           chatActive={focus.isActive("input")}
           onChat={handleChat}
+          chatPending={ai.pending}
+          chatProgress={ai.label}
           inputBounds={focus.activeItem?.id === "input" ? focus.activeItem.bounds : undefined}
         />
       ) : (
@@ -215,6 +227,8 @@ export function SetupLayout({ store }: SetupLayoutProps) {
           onPromptSubmit={handlePromptSubmit}
           chatActive={focus.isActive("input")}
           onChat={handleChat}
+          chatPending={ai.pending}
+          chatProgress={ai.label}
           inputMaxLines={inputLinesForPanel(layout.mainHeight)}
           inputWidth={layout.mainWidth}
           inputBounds={focus.activeItem?.id === "input" ? focus.activeItem.bounds : undefined}
@@ -395,6 +409,8 @@ function WideSetup(props: WideSetupProps) {
           onPromptSubmit={props.onPromptSubmit}
           chatActive={props.chatActive}
           onChat={props.onChat}
+          chatPending={props.chatPending}
+          chatProgress={props.chatProgress}
           inputMaxLines={props.inputMaxLines}
           inputWidth={Math.max(12, props.inputWidth - 4)}
           inputBounds={props.inputBounds}
@@ -423,7 +439,7 @@ function StackedSetup(props: StackedSetupProps) {
     <>
       <Panel title="PROJECT" focusState={props.focus("project")} width="100%" height={projectHeight}>
         {projectHeight <= 5 ? (
-          <CompactProjectInfo projectName={props.projectName} cwd={props.cwd} scan={props.scan} noProject={props.noProject} />
+          <CompactProjectInfo projectName={props.projectName} cwd={props.cwd} scan={props.scan} noProject={props.noProject} rows={projectHeight - 3} />
         ) : (
           <ProjectInfo projectName={props.projectName} cwd={props.cwd} scan={props.scan} noProject={props.noProject} />
         )}
@@ -448,6 +464,8 @@ function StackedSetup(props: StackedSetupProps) {
         onPromptSubmit={props.onPromptSubmit}
         chatActive={props.chatActive}
         onChat={props.onChat}
+        chatPending={props.chatPending}
+        chatProgress={props.chatProgress}
         inputMaxLines={inputMaxLines}
         inputWidth={Math.max(12, props.layout.width - 4)}
         inputBounds={props.inputBounds}
@@ -477,6 +495,8 @@ function DiaryPanel({
   onPromptSubmit,
   chatActive,
   onChat,
+  chatPending,
+  chatProgress,
   inputMaxLines,
   inputWidth,
   inputBounds,
@@ -496,15 +516,17 @@ function DiaryPanel({
             {noProject ? "No project files detected in this directory" : currentStepLabel}
           </Text>
         </Box>
-        <Box flexDirection="column" flexGrow={1} overflow="hidden">
+        <Box flexDirection="column" flexGrow={1} flexBasis={0} minHeight={0} overflow="hidden">
           <Timeline
+            fill
             events={events}
             maxItems={maxLogLines}
+            active={focus("diary") !== undefined}
             width={typeof inputWidth === "number" ? inputWidth : 80}
             emptyText={noProject ? "Nothing to run here." : "Waiting for execution to begin..."}
           />
         </Box>
-        <Box marginBottom={1}>
+        <Box flexShrink={0}>
           {pendingPrompt ? (
             <PromptCard
               title={pendingPrompt.title}
@@ -537,6 +559,8 @@ function DiaryPanel({
               active={chatActive}
               focusState={focus("input")}
               onSubmit={onChat}
+              disabled={chatPending}
+              disabledText={chatProgress}
               placeholder={noProject ? "Open a project folder, then run setup again..." : "Ask anything or paste a value..."}
               width={inputWidth}
               maxLines={inputMaxLines}
@@ -556,9 +580,14 @@ function StepList({ steps, noProject, limit }: { steps: Array<{ id: string; labe
   if (steps.length === 0) {
     return <Text color={colors.textDim}>Scanning...</Text>;
   }
+  if (limit <= 1) {
+    const step = steps.find(item => item.status === "running" || item.status === "failed") || steps.at(-1)!;
+    return <Text color={step.status === "failed" ? colors.error : colors.text} wrap="truncate">{step.label} ({steps.filter(item => item.status === "done").length}/{steps.length} done)</Text>;
+  }
+  const visible = Math.max(1, steps.length > limit ? limit - 1 : limit);
   return (
     <>
-      {steps.slice(0, Math.max(1, limit)).map((step) => {
+      {steps.slice(0, visible).map((step) => {
         const icon = step.status === "done" ? icons.check
           : step.status === "running" ? icons.arrowRight
           : step.status === "failed" ? icons.cross
@@ -573,7 +602,7 @@ function StepList({ steps, noProject, limit }: { steps: Array<{ id: string; labe
           </Text>
         );
       })}
-      {steps.length > limit && <Text color={colors.textDim}>… {steps.length - limit} more</Text>}
+      {steps.length > visible && <Text color={colors.textDim}>… {steps.length - visible} more</Text>}
     </>
   );
 }
@@ -613,12 +642,15 @@ function CompactProjectInfo({
   cwd,
   scan,
   noProject,
+  rows = 2,
 }: {
   projectName: string;
   cwd: string;
   scan: { framework?: string | null; language?: string | null; packageManager?: string | null } | null;
   noProject: boolean;
+  rows?: number;
 }) {
+  if (rows <= 1) return <Text color={noProject ? colors.warning : colors.text} wrap="truncate">{noProject ? "No project detected" : [projectName, scan?.language, scan?.packageManager].filter(Boolean).join(" · ")}</Text>;
   if (noProject) {
     return (
       <>
@@ -722,9 +754,9 @@ function SideDetails({
   if (compact) {
     return (
       <>
-        {notices.length > 0 ? notices.slice(0, 2).map((n, i) => (
+        {notices.length > 0 ? notices.slice(0, 1).map((n, i) => (
           <Text key={i} color={n.type === "error" ? colors.error : n.type === "warning" ? colors.warning : colors.info} wrap="truncate">
-            {n.type === "error" ? "●" : n.type === "warning" ? "△" : "ℹ"} {n.message}
+            {n.type === "error" ? "●" : n.type === "warning" ? "△" : "i"} {n.message}
           </Text>
         )) : <Text color={colors.textDim}>No issues</Text>}
       </>
@@ -849,6 +881,8 @@ function Footer({ width }: { width: number }) {
 }
 
 interface WideSetupProps {
+  chatPending?: boolean;
+  chatProgress?: string;
   layout: Layout;
   focus: (id: string) => "focused" | "ancestor" | undefined;
   projectName: string;
@@ -910,8 +944,8 @@ function stackedSectionHeights(height: number) {
   }
 
   if (contentHeight < 26) {
-    const projectHeight = 5;
-    const stepHeight = 5;
+    const projectHeight = 4;
+    const stepHeight = 4;
     const noticesHeight = 4;
     return {
       projectHeight,
@@ -933,6 +967,8 @@ function stackedSectionHeights(height: number) {
 }
 
 interface StackedSetupProps {
+  chatPending?: boolean;
+  chatProgress?: string;
   layout: Layout;
   focus: (id: string) => "focused" | "ancestor" | undefined;
   projectName: string;
@@ -964,6 +1000,8 @@ interface StackedSetupProps {
 }
 
 interface DiaryPanelProps {
+  chatPending?: boolean;
+  chatProgress?: string;
   width: number | string;
   flexGrow?: number;
   focus: (id: string) => "focused" | "ancestor" | undefined;

@@ -54,7 +54,7 @@ describe("dashboard/status collector", () => {
   it("collects real project, env, dependency, process, and history signals", async () => {
     const status = await collectDashboardStatus(tempDir);
 
-    expect(status.projectName).toMatch(/^setupr-dashboard-/);
+    expect(status.projectName).toBe("dash-project");
     expect(status.hasProject).toBe(true);
     expect(status.scan?.packageManager).toBe("npm");
     expect(status.env.missing).toEqual(["API_KEY"]);

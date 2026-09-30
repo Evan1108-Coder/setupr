@@ -419,7 +419,10 @@ export function showHelp(path: string[] = []): boolean {
     }));
     return false;
   }
-  renderHelp(node);
+  const explain = GLOBAL_OPTIONS.find(option => option.name === "--explain")!;
+  renderHelp(key && !node.options?.some(option => option.name === "--explain")
+    ? { ...node, options: [...(node.options || []), explain] }
+    : node);
   return true;
 }
 

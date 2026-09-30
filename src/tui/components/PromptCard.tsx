@@ -1,8 +1,8 @@
 import React, { useMemo, useRef, useState } from "react";
-import { Box, Text, useInput } from "ink";
+import { Box, Text } from "ink";
 import { colors, getBorderStyle, icons } from "../theme.js";
 import type { FocusBounds, FocusState } from "../hooks/useFocusNavigation.js";
-import { createTerminalControlInputStripper } from "../terminalInput.js";
+import { createTerminalControlInputStripper, useSafeInput as useInput } from "../terminalInput.js";
 import { BoundedTextInput } from "./BoundedTextInput.js";
 
 export interface PromptOption {

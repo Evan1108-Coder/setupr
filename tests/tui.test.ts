@@ -199,6 +199,17 @@ describe("TUI focus navigation", () => {
     }
   });
 
+  it("reserves space for clean input below all compact panels", () => {
+    for (const height of [20, 22, 24, 30, 40]) {
+      const layout = buildCleanLayout(80, height);
+      const items = buildCleanFocusItems(layout);
+      const risk = items.find(item => item.id === "risk")!.bounds!;
+      const input = items.find(item => item.id === "input")!.bounds!;
+      expect(risk.y + risk.height).toBeLessThanOrEqual(input.y);
+      expect(input.y + input.height).toBeLessThanOrEqual(height);
+    }
+  });
+
   it("uses a stacked env editor layout on narrow terminals without overflowing height", () => {
     const layout = buildEnvLayout(72, 22);
     const items = buildEnvFocusItems(layout);

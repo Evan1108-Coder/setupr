@@ -235,10 +235,10 @@ function CleanCommandStrip({ layout, phase, inputActive, inputBounds, focus, onC
   const placeholder = phase === "blocked"
     ? 'Type CLEAN to confirm, or q to quit...'
     : phase === "done"
-      ? "Clean finished. Ask or press q to quit..."
+      ? "Clean finished. Press q outside input to quit."
       : "Type CLEAN to confirm deletion...";
   return (
-    <Box width="100%" height={layout.inputHeight} justifyContent="center" alignItems="center">
+    <Box width="100%" height={layout.inputHeight} flexShrink={0} justifyContent="center" alignItems="center">
       <ChatInput
         active={inputActive}
         focusState={focus("input")}
@@ -248,6 +248,7 @@ function CleanCommandStrip({ layout, phase, inputActive, inputBounds, focus, onC
         maxLines={layout.inputMaxLines}
         scrollBounds={inputBounds}
         disabled={disabled}
+        busy={phase === "cleaning"}
         disabledText={placeholder}
       />
     </Box>
@@ -255,6 +256,7 @@ function CleanCommandStrip({ layout, phase, inputActive, inputBounds, focus, onC
 }
 
 function RiskPanel({ phase, risk, failed, totalBytes, targets, compact = false }: CleanViewProps & { compact?: boolean }) {
+  if (compact) return <Text wrap="truncate" color={statusColor(risk)}>{risk} · {formatSize(totalBytes)} · {phase} · {failed} failed</Text>;
   return (
     <Box flexDirection="column">
       <MetricText value={formatSize(totalBytes)} label="estimated space" color={totalBytes > 0 ? colors.error : colors.success} />
@@ -276,7 +278,7 @@ export function buildCleanLayout(width: number, height: number): CleanLayoutGeom
   const targetsWidth = stacked ? width : clamp(Math.floor(width * 0.30), 28, 42);
   const riskWidth = stacked ? width : clamp(Math.floor(width * 0.27), 28, 40);
   const reviewWidth = stacked ? width : Math.max(8, width - targetsWidth - riskWidth - gap * 2);
-  const inputMaxLines = Math.max(1, Math.min(4, Math.floor(bodyHeight / 6)));
+  const inputMaxLines = stacked ? 1 : Math.max(1, Math.min(4, Math.floor(bodyHeight / 6)));
   const inputHeight = inputMaxLines + 2;
   const inputBounds = {
     x: stacked ? 3 : 3,
@@ -316,8 +318,8 @@ function stackedCleanHeights(bodyHeight: number, inputHeight: number) {
       riskHeight: Math.max(2, available - targetsHeight - reviewHeight),
     };
   }
-  const targetsHeight = Math.max(7, Math.floor(available * 0.45));
-  const reviewHeight = Math.max(6, Math.floor(available * 0.32));
+  const targetsHeight = Math.max(4, Math.floor((available - 4) / 2));
+  const reviewHeight = Math.max(4, available - targetsHeight - 4);
   return {
     targetsHeight,
     reviewHeight,

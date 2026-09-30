@@ -554,17 +554,22 @@ Setupr TUIs share one terminal-native visual grammar:
 
 **Keyboard & mouse map:**
 
+AI replies render formatted Markdown rather than literal formatting markers. Pending replies show an animated indicator. The env editor has a clickable Show/Hide control (Ctrl+R) for sensitive values, which re-masks automatically. For non-TUI results, add `--explain` to request an advisory AI explanation after the original output; it appears on stderr and does not change the command's exit code. See [command details](docs/COMMANDS.md#explain-a-command-result) for privacy and mode restrictions.
+
 | Input | Action |
 |-------|--------|
 | **Arrow keys** | Move between neighboring panels |
 | **Tab / Shift+Tab** | Move to next / previous focusable panel |
 | **Mouse click** | Focus a panel (terminals with SGR mouse events) |
 | **Option/Alt+Arrow** | Move by word (where the terminal supports it) |
+| **Backspace / Mac Delete** | Delete previous character |
+| **Fn+Delete / Ctrl+D** | Delete next character |
 | **Option/Alt+Delete or Ctrl+W** | Delete previous word |
 | **Ctrl+A / Ctrl+E** | Jump to start / end of input |
 | **Ctrl+U / Ctrl+K** | Clear before / after cursor |
 | **Enter** | Confirm / submit focused input |
-| **Esc** | Leave or skip the active input (where supported) |
+| **Esc** | Cancel a pending AI reply, otherwise leave/skip input where supported |
+| **Mouse wheel / PgUp/PgDn** | Scroll setup/chat replies (hover/focus the transcript) |
 | **q** | Quit when focus is not inside an input |
 
 **Behavior notes:** The TUI runs in the terminal alternate screen, so exiting returns you to the original shell history instead of leaving the dashboard in scrollback. It enables SGR mouse reporting and bracketed paste while active, then disables both on cleanup. It does **not** set a background color — Terminal, iTerm2, Ghostty, and other profiles keep their own theme. Interactive inputs stay anchored at the bottom of their panel, wrap within the box, and scroll once they reach the panel's line cap. TUIs require at least a `60x18` terminal grid; smaller windows show a resize notice instead of compressing panels until borders break. If a terminal font/profile renders thin Unicode borders with visible gaps, set `SETUPR_TUI_BORDER=bold`, `double`, `round`, or `classic`.
@@ -651,14 +656,13 @@ npm run smoke:fixtures:tui
 For local package/install smoke:
 
 ```bash
-pkg=$(npm pack --silent)
-npm exec --yes --package "./$pkg" -- setupr --version
-npx --yes "file:$(pwd)/$pkg" --version
+npm run smoke:package
 npm publish --dry-run
-rm -f "$pkg"
 ```
 
-> Use `file:` or `--package` for tarball checks. A bare `npx ./$pkg` is treated like an executable file path and fails. Scoped packages must be public when published, so `package.json` sets `publishConfig.access = "public"`.
+The package smoke packs the actual release files, installs them in a fresh temporary directory, runs both terminal commands, and checks healthy and malformed projects. CI also runs the packed CLI on Node 18, the minimum supported runtime. Scoped packages must be public when published, so `package.json` sets `publishConfig.access = "public"`.
+
+Maintainers: publication uses the GitHub Release workflow and npm Trusted Publishing. See [CONTRIBUTING.md](CONTRIBUTING.md) for the exact release steps. Do not put npm access tokens in project files or chat.
 
 ---
 

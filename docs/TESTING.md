@@ -62,7 +62,52 @@ The older `smoke:fixtures:tui` harness requires `expect` and verifies actual PTY
 edit saved to disk. Unit/component tests separately cover resize, mouse and paste sequences,
 focus, keyboard shortcuts, secret masking, Unicode input, and panel bounds.
 
+Focused chat/input regressions can be run with:
+
+```sh
+npx vitest run tests/bounded-text-input.test.ts tests/terminal-input.test.ts tests/ai-request-ui.test.ts tests/setup-chat-ui.test.ts tests/timeline-scroll.test.ts tests/ai-client.test.ts tests/ai-retry.test.ts tests/ai-response.test.ts tests/fullscreen-output.test.ts
+```
+
+These cover repeated/split deletion, backward versus forward editing, provider multipart and
+reasoning-only replies, hung transports, cancellation and late results, setup input recovery,
+long reply scrolling, usable transcript space at 80x24, and full-height Ink output without screen clears. Provider responses are
+controlled fixtures, not paid live API calls. The repaint checks exercise the installed Ink renderer
+and terminal control sequences; they do not establish native-terminal font or compositor behavior.
+
+Ink is pinned to 5.2.1 because the safe keyboard adapter resolves its installed parser and React
+batching implementation. Before upgrading Ink, run the safe keyboard hook and fresh-process
+runtime test along with the full-screen output tests; these internal APIs are not an upgrade contract.
+
 ## Limits
+
+### September 29 UI And Explanation Checks
+
+The local UI-polish run exercised 343 CLI invocations, including help for all 58
+registered commands and 175 subcommands. The remainder covered actions and invalid
+argument paths in a disposable monorepo. This is not 343 successful operations:
+expected failures included malformed files, missing arguments, unavailable Docker,
+and missing configuration. Init/migrate were help-only in this matrix; runtime
+switching and package add/remove were argument-validation checks, not system changes.
+
+The separate chaos suite passed 116 checks across Node, Python, Rust, Go, Docker,
+monorepos, corrupt configuration/state, Git remotes, env, secrets, and real local
+process start/restart/stop. Component tests cover Markdown, scrollable input,
+fragmented mouse reports, deletion, masked-value reveal, cancellation, and resize.
+
+Native iTerm2 windows were captured at 140x40 and 80x24 for dashboard, setup, chat,
+status, start, doctor, update, clean, env, and auth. Visual review found compact
+row collisions and an overflowing clean input strip; those were corrected and
+recaptured. Ghostty additionally received a native env-editor check. This is not
+a full cross-product of every terminal profile, size, and interactive state.
+
+Three live AI messages were used: chat with a formatted answer, explanation of a
+malformed-project error, and explanation alongside JSON status output. The error
+exit status and parseable JSON stdout were preserved. No external deployment,
+package publication, or remote Git mutation was part of this smoke test.
+
+Local captures and the detailed invocation log are under the ignored
+`test-artifacts/ui-polish/` directory. They are not generated mockups and are not
+included in the npm package.
 
 Passing these checks is evidence for the recorded cases, not a claim that every possible project
 or terminal has been tested. Live provider quotas/model availability, authenticated Git transport,
@@ -76,9 +121,10 @@ original text. Ordinary supported Unicode remains visible normally, and masked v
 
 ## Packaging
 
-`npm pack` and `npm publish` trigger `prepack`, rebuilding the CLI. CI exercises Linux with Node
-20/22/24 and macOS with Node 22. The published CLI targets Node 18; the development toolchain
-requires Node 20.19+ or a supported newer Node release.
+`npm pack` and `npm publish` trigger `prepack`, rebuilding the CLI. Run `npm run smoke:package`
+to pack, install, and exercise the actual distributable in an isolated directory. CI exercises
+source on Linux with Node 20/22/24 and macOS with Node 22, then runs the packed CLI on Node 18.
+The development toolchain requires Node 20.19+ or a supported newer Node release.
 
 The esbuild override keeps the build/test toolchain on the patched 0.28 line while tsup's upstream
 dependency range still targets 0.27. Revalidate build, tests, packaging, and `npm audit` when changing it.

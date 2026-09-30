@@ -14,7 +14,7 @@ import {
   selectDefaultModel,
   type AIModel,
 } from "./models.js";
-import { buildDirectorContextPacket } from "./directorContext.js";
+import { buildDirectorContextPacket, sanitizeForAI } from "./directorContext.js";
 import { intelligentResponse } from "./intelligence.js";
 import { applySteeringToPlan, formatPlanChange, maskKeyValues } from "../agent/runtime.js";
 import {
@@ -31,6 +31,8 @@ export interface DirectorInput {
   scan: ScanResult;
   contextDSL: string;
   store: AppStore;
+  signal?: AbortSignal;
+  onProgress?: (message: string) => void;
 }
 
 export interface DirectorResult {
@@ -39,6 +41,7 @@ export interface DirectorResult {
 }
 
 export async function handleDirectorInput(input: DirectorInput): Promise<DirectorResult> {
+  input.signal?.throwIfAborted();
   const text = input.text.trim();
   if (!text) return { handled: true, action: "empty" };
   const parsedIntent = parseUserIntent(text);
@@ -58,10 +61,18 @@ export async function handleDirectorInput(input: DirectorInput): Promise<Directo
   const planResult = maybeHandlePlanIntent(input, text, parsedIntent);
   if (planResult) return planResult;
 
+  const conversation = input.store.getState().messages
+    .filter((message) => message.role === "user" || message.role === "assistant")
+    .slice(-12);
+  if (conversation.at(-1)?.role === "user" && conversation.at(-1)?.content === sanitizeForAI(text)) conversation.pop();
   const result = await intelligentResponse(text, input.scan, input.contextDSL, {
     parsedIntent,
+    signal: input.signal,
+    onProgress: input.onProgress,
+    messages: conversation.map((message) => ({ role: message.role as "user" | "assistant", content: sanitizeForAI(message.content).slice(-4000) })),
     directorContext: buildDirectorContextPacket({ ...input, userText: text, parsedIntent }),
   });
+  input.signal?.throwIfAborted();
   input.store.getState().addMessage({
     role: "assistant",
     content: result.response,
@@ -201,6 +212,7 @@ function maybeHandlePlanIntent(input: DirectorInput, text: string, intent: Parse
 
   const steeringText = intent.confidence !== "low" ? intentToSteeringText(intent) : text;
   const adjusted = applySteeringToPlan(state.steps, steeringText);
+  if (!adjusted.diff.added.length && !adjusted.diff.removed.length && !adjusted.diff.changed.length && !adjusted.diff.reordered.length) return null;
   state.setSteps(adjusted.steps);
   input.store.getState().addMessage({ role: "assistant", content: formatPlanChange(adjusted.diff) });
   for (const note of adjusted.notes) {

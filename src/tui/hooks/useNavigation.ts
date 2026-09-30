@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useInput } from "ink";
+import { useSafeInput as useInput } from "../terminalInput.js";
 
 interface UseNavigationOptions {
   panelCount: number;

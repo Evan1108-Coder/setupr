@@ -43,7 +43,7 @@ export function Panel({
       height={height}
       minHeight={minHeight}
       flexGrow={flexGrow}
-      flexShrink={flexShrink}
+      flexShrink={flexShrink ?? (height !== undefined ? 0 : 1)}
       paddingX={1}
     >
       <Box width="100%" minWidth={0} flexShrink={0} justifyContent="space-between">
@@ -58,7 +58,7 @@ export function Panel({
           </Box>
         )}
       </Box>
-      <Box flexDirection="column" width="100%" minWidth={0} flexGrow={1} flexShrink={1} overflow="hidden">
+      <Box flexDirection="column" width="100%" minWidth={0} minHeight={0} flexBasis={0} flexGrow={1} flexShrink={1} overflow="hidden">
         {children}
       </Box>
     </Box>

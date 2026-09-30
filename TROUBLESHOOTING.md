@@ -39,6 +39,8 @@ Supported values are `bold`, `double`, `round`, and `classic`/`ascii`.
 
 ### Mouse or scroll codes appear in the input
 
+For current builds, mouse clicks use the input's measured screen position rather than a fixed layout estimate. In the env editor, use Show/Hide or Ctrl+R to temporarily reveal a sensitive value. A cleared field must show only the generic `value` placeholder, never the old secret.
+
 If you see text like `[<0;78;17m` after clicking or scrolling, the terminal left mouse reporting enabled after an interrupted process. Setupr disables mouse reporting on exit and strips those reports from inputs, but you can manually reset the terminal with:
 
 ```bash
@@ -55,7 +57,22 @@ printf '\033[?2004l'
 
 Inside focused input boxes, Setupr supports common terminal editing shortcuts where the terminal sends compatible sequences: `Ctrl+A/E`, `Ctrl+U/K`, `Ctrl+W`, Option/Alt word movement, and Option/Alt delete. Some terminals let users remap Option-key behavior; if a shortcut inserts characters instead of editing text, check the terminal keyboard profile.
 
-In `setupr chat`, Enter sends a normal message. Ctrl+Enter sends a steering instruction where supported; `/steer ...` is the portable fallback. While the AI is thinking or running, the normal chat box is locked. Press Esc to pause the AI state and Ctrl+R to resume the session.
+The Mac Delete key deletes backward; Fn+Delete and Ctrl+D delete forward. Option+Delete or
+Ctrl+W removes the previous word. Repeated keys and bracketed pastes are handled in order.
+
+In `setupr chat`, Enter sends a normal message. Ctrl+Enter sends a steering instruction where supported; `/steer ...` is the portable fallback. While a reply is pending, the input shows progress and elapsed time instead of accepting duplicate submissions. Press Esc to cancel the request, then send another message to retry. Ctrl+R clears the paused status; it does not replay a cancelled request. In setup, cancelling a chat reply does not stop an executing setup step.
+
+### AI reply appears stuck or the screen blinks
+
+Conversational replies have a 60-second total budget, including fallback attempts. The input
+reports whether Setupr is waiting for a model, rate limit, or retry. Responses appear when
+complete; this is not token streaming. Empty or reasoning-only provider responses produce an
+explanation rather than a permanent `<think>` message. Scroll over the setup/chat transcript to
+read long answers. Escape cancels waiting immediately.
+
+Full-screen output uses changed-row updates without clearing the terminal between frames.
+If you still see the old behavior, check `command -v setupr` and verify which installation you
+are running. Changes in a local source checkout do not update an npm-installed binary automatically.
 
 ### AI features not working
 

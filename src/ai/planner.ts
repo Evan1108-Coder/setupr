@@ -60,7 +60,7 @@ Be practical and specific to the detected stack.`,
     },
   ];
 
-  const result = await chat(messages, { temperature: 0.1, maxTokens: 1200, timeoutMs: 8000 });
+  const result = await chat(messages, { temperature: 0.1, maxTokens: 1200, timeoutMs: 8000, maxRetries: 0 });
 
   try {
     const jsonMatch = result.content.match(/\[[\s\S]*\]/);

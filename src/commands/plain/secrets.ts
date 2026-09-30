@@ -111,7 +111,7 @@ async function secretsGet(cwd: string, flags: SecretsFlags): Promise<void> {
 }
 
 async function secretsList(cwd: string): Promise<void> {
-  const secrets = await loadSecrets(cwd);
+  const secrets = await loadSecrets(cwd, true);
   const keys = Object.keys(secrets);
 
   if (keys.length === 0) {
