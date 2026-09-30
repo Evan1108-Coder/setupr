@@ -1,6 +1,5 @@
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
-import { setTimeout as delay } from "node:timers/promises";
 import type { WriteStream } from "node:tty";
 import React, { act, useState } from "react";
 import { Box, Text, render, useInput } from "ink";
@@ -132,9 +131,10 @@ describe("fullscreen output using the installed Ink renderer", () => {
   it("reproduces Ink 5's full clear on an unchanged full-height frame without the adapter", async () => {
     const tty = new FakeTTY();
     inkFor(frame(["Setupr setup"], tty.rows), tty, false);
-    await delay(50);
+    await vi.waitFor(() => expect(tty.writes.join("")).toContain(ansiEscapes.clearTerminal));
     expect(tty.take()).toContain(ansiEscapes.clearTerminal);
     act(() => { tty.emit("resize"); });
+    await vi.waitFor(() => expect(tty.writes.join("")).toContain(ansiEscapes.clearTerminal));
     expect(tty.take()).toContain(ansiEscapes.clearTerminal);
   });
 
