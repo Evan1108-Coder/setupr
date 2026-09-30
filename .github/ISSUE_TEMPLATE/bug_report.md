@@ -16,7 +16,11 @@ labels: bug
 
 ## Environment
 - OS:
-- Version/commit:
+- Setupr version (`setupr --version`):
+- Node version (`node --version`):
+- Terminal and size (for TUI bugs):
+- Project type and package manager:
+- Command and flags:
 
 ## Logs or screenshots
-Remove secrets before pasting logs.
+Remove API keys, `.env` values, credentials, and private project details before pasting logs or screenshots.

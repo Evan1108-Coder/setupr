@@ -1,6 +1,6 @@
 # Release Verification Snapshot
 
-This document records the scope of the 1.0.6 hardening pass on 2026-09-27.
+This is a historical snapshot of the 1.0.6 hardening pass on 2026-09-27. For current release changes, see [CHANGELOG.md](../CHANGELOG.md).
 It is a verification record, not a guarantee that every project or terminal works.
 
 ## What Changed

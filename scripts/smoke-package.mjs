@@ -71,6 +71,7 @@ try {
   run("npm", ["install", "--prefix", prefix, tarball, "--ignore-scripts", "--no-audit", "--no-fund"], { timeout: 180_000 });
   const installed = join(prefix, "node_modules", "@evan-coder", "setupr");
   const installedInfo = JSON.parse(readFileSync(join(installed, "package.json"), "utf8"));
+  assert.equal(installedInfo.name, packageInfo.name);
   assert.equal(installedInfo.version, packageInfo.version);
   const executable = join(installed, "dist", "setup.js");
   assert.ok(existsSync(executable));

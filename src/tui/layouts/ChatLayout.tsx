@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Box, Text, useApp } from "ink";
 import { useSafeInput as useInput } from "../terminalInput.js";
 import { collectContext } from "../../context/collector.js";
+import { SETUPR_VERSION } from "../../version.js";
 import { createProjectEngine } from "../../core/engine.js";
 import { handleDirectorInput } from "../../ai/director.js";
 import { contextToDSL } from "../../ai/dsl.js";
@@ -476,7 +477,7 @@ function Footer({ status, width }: { status: ChatSessionStatus; width: number })
     ? "Esc cancel AI · Tab panels · q quit outside input"
     : "Enter send · Ctrl+Enter or /steer steer · Tab panels · ↑/↓ navigate · q quit outside input";
   return (
-    <TuiFooter width={width} left={width < 90 ? text.replace(" · ↑/↓ navigate", "") : text} right={`v${process.env.npm_package_version || "0.0.0"}`} />
+    <TuiFooter width={width} left={width < 90 ? text.replace(" · ↑/↓ navigate", "") : text} right={`v${SETUPR_VERSION}`} />
   );
 }
 

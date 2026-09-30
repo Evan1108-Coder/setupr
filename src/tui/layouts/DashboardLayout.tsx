@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Box, Text, useApp } from "ink";
 import { collectDashboardStatus, createDashboardFallbackStatus, type DashboardStatus } from "../../status/collector.js";
+import { SETUPR_VERSION } from "../../version.js";
 import { Panel } from "../components/Panel.js";
 import { Spinner } from "../components/Spinner.js";
 import { KVRow, TooSmallTerminal, TuiFooter, TuiHeader, formatAge, isTerminalTooSmall, shortPath, statusColor } from "../components/TuiFrame.js";
@@ -107,7 +108,7 @@ export function DashboardLayout({ cwd, initialStatus, variant = "dashboard" }: D
       <TuiFooter
         width={terminal.width}
         left="Ctrl+C abort · Tab next panel · ←/↑/↓/→ scroll/navigate · q quit"
-        right={status ? `v${process.env.npm_package_version || "0.0.0"} · ${status.projectName}` : undefined}
+        right={status ? `v${SETUPR_VERSION} · ${status.projectName}` : undefined}
       />
     </Box>
   );

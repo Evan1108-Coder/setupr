@@ -6,6 +6,7 @@ import { createSetuprError, printPlainError } from "../../errors/index.js";
 import { loadConfig, saveConfig } from "../../state/config.js";
 import { runCommandArgs } from "../../executor/index.js";
 import { loadEnabledPlugins } from "../../plugins/runtime.js";
+import { SETUPR_PACKAGE_NAME, SETUPR_VERSION } from "../../version.js";
 
 interface PluginManifest {
   name: string;
@@ -326,7 +327,7 @@ async function pluginCreate(cwd: string, flags: { args?: string[]; force?: boole
     },
     keywords: ["setupr", "setupr-plugin"],
     peerDependencies: {
-      setupr: "^1.0.0",
+      [SETUPR_PACKAGE_NAME]: `^${SETUPR_VERSION.split(".")[0]}.0.0`,
     },
     devDependencies: {
       typescript: "^5.7.0",

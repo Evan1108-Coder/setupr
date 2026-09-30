@@ -54,7 +54,7 @@ adds missing template keys while preserving your existing values, comments, and 
 | **CI / scripts** | add `--plain` (no TUI) and `--force` (skip safe prompts); `--json` for machine-readable output |
 | **Requires** | Node.js ≥ 18, a Unicode-capable terminal |
 
-> **Status: stable public release.** Setupr is ready for npm installation and normal daily CLI use on supported terminals and Node versions.
+> The npm version badge shows the version people can install today. GitHub's `master` branch may be ahead until its GitHub Release has finished publishing to npm.
 
 **Who it's for:** developers who clone projects often and don't want to manually guess install commands, runtime versions, env files, ports, or verification steps.
 

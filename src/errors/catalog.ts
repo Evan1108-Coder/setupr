@@ -123,7 +123,7 @@ export const ERROR_CATALOG: Record<SetuprErrorCode, Template> = {
 
   TELEMETRY_SEND_FAILED: info("telemetry", "Telemetry send failed", "Anonymous usage data could not be sent.", ["This is not critical; Setupr continues normally."]),
 
-  UPDATE_AVAILABLE: info("config", "Update available", "A newer version of Setupr is available.", ["Run npm install -g setupr to update."]),
+  UPDATE_AVAILABLE: info("config", "Update available", "A newer version of Setupr is available.", ["Run npm install -g @evan-coder/setupr to update."]),
   UPDATE_FETCH_FAILED: network("Update check failed", "Setupr could not check for updates.", ["Check network access."]),
 
   AI_RETRY_EXHAUSTED: provider("AI retries exhausted", "All retry attempts to the AI provider have failed.", ["Try again later, switch providers, or continue without AI."]),

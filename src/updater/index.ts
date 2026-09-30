@@ -1,7 +1,7 @@
 import chalk from "chalk";
 import { loadConfig, saveConfig } from "../state/config.js";
+import { SETUPR_PACKAGE_NAME, SETUPR_VERSION } from "../version.js";
 
-const PACKAGE_NAME = "setupr";
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 interface VersionInfo {
@@ -27,6 +27,10 @@ export async function checkForUpdates(silent = false): Promise<VersionInfo | nul
   try {
     const currentVersion = await getCurrentVersion();
     const latestVersion = await fetchLatestVersion();
+    if (!latestVersion) {
+      if (!silent) console.log(chalk.dim("Could not check for updates."));
+      return null;
+    }
 
     // Update last check timestamp
     config.lastUpdateCheck = Date.now();
@@ -48,33 +52,26 @@ export async function checkForUpdates(silent = false): Promise<VersionInfo | nul
 }
 
 export async function getCurrentVersion(): Promise<string> {
-  try {
-    const { createRequire } = await import("module");
-    const require = createRequire(import.meta.url);
-    const pkg = require("../../package.json");
-    return pkg.version || "0.0.0";
-  } catch {
-    return "0.0.0";
-  }
+  return SETUPR_VERSION;
 }
 
-async function fetchLatestVersion(): Promise<string> {
+export async function fetchLatestVersion(): Promise<string | null> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5000);
 
   try {
-    const res = await fetch(`https://registry.npmjs.org/${PACKAGE_NAME}/latest`, {
+    const res = await fetch(`https://registry.npmjs.org/${encodeURIComponent(SETUPR_PACKAGE_NAME)}/latest`, {
       signal: controller.signal,
       headers: { Accept: "application/json" },
     });
     clearTimeout(timeout);
 
-    if (!res.ok) return "0.0.0";
+    if (!res.ok) return null;
     const data = (await res.json()) as { version?: string };
-    return data.version || "0.0.0";
+    return data.version || null;
   } catch {
     clearTimeout(timeout);
-    return "0.0.0";
+    return null;
   }
 }
 
@@ -90,9 +87,7 @@ function compareVersions(a: string, b: string): number {
 
 function printUpdateNotice(current: string, latest: string): void {
   console.log("");
-  console.log(chalk.yellow("  ┌──────────────────────────────────────────┐"));
-  console.log(chalk.yellow("  │") + chalk.white("  Update available! ") + chalk.dim(`${current}`) + chalk.white(" → ") + chalk.green(`${latest}`) + chalk.yellow("      │"));
-  console.log(chalk.yellow("  │") + chalk.dim(`  Run: npm install -g ${PACKAGE_NAME}`) + chalk.yellow("        │"));
-  console.log(chalk.yellow("  └──────────────────────────────────────────┘"));
+  console.log(chalk.yellow(`  Update available: ${current} → ${latest}`));
+  console.log(chalk.dim(`  Run: npm install -g ${SETUPR_PACKAGE_NAME}`));
   console.log("");
 }

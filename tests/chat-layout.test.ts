@@ -8,6 +8,7 @@ import { ChatLayout } from "../src/tui/layouts/ChatLayout.js";
 import { createAppStore } from "../src/state/store.js";
 import { saveChatSession } from "../src/state/chatSession.js";
 import { cleanup, render, flushTui } from "./helpers/tui.js";
+import packageInfo from "../package.json";
 const terminal = vi.hoisted(() => ({ width: 140, height: 40 }));
 vi.mock("../src/tui/hooks/useTerminalSize.js", () => ({ useTerminalSize: () => terminal }));
 const directories: string[] = [];
@@ -36,6 +37,7 @@ describe("real chat layout state", () => {
       expect(frame.split("\n").every(line=>stringWidth(line)<=width)).toBe(true);
       expect(frame).toContain("SESSION");
       expect(frame).toContain("PLAN");
+      if (width === 140) expect(frame).toContain(`v${packageInfo.version}`);
       expect(frame).not.toContain("AI is working");
     }
   }, 15000);

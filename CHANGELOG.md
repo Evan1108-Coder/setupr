@@ -2,6 +2,25 @@
 
 All notable changes to Setupr will be documented in this file. Setupr keeps a changelog because it is a versioned developer tool with user-facing CLI behavior.
 
+Some earlier version entries describe repository milestones that were not published separately to npm. Check the npm version badge in the README for the current installable release.
+
+## 2.0.1
+
+### Changed
+- Consolidated the project-control CLI and TUI improvements into one release. The npm package remains `@evan-coder/setupr` and the primary command remains `setupr`; existing command names and the legacy `setup` alias are retained.
+- AI conversations now render formatted Markdown, show animated pending and retry states, support cancellation, and keep long transcripts and inputs bounded inside their panels.
+- Plain commands can add `--explain` for a separate, bounded AI explanation after the ordinary result. Secret-management commands are excluded.
+
+### Fixed
+- Update checks, installation hints, and generated plugin peer dependencies now target the owned scoped npm package instead of the unrelated unscoped `setupr` package.
+- Dashboard and chat footers show the bundled Setupr version even when the CLI is run outside `npm run`.
+- `info` and `status` use the package manifest's project name consistently, falling back to the directory name.
+
+### Release quality
+- Added a clean-install smoke test of the actual npm tarball, including its file allowlist and error behavior, plus CI coverage of the installed CLI on Node 18.
+- Added a GitHub Release workflow for npm Trusted Publishing and provenance. Publication still requires the package owner to configure the trusted publisher on npm.
+- Verified typecheck, lint, unit tests, real CLI chaos fixtures, production audit, and a publish dry run before release.
+
 ## 1.0.6
 
 ### Fixed

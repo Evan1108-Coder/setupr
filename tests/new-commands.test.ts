@@ -6,6 +6,7 @@ import { spawnSync } from "child_process";
 
 // Import the router to test command routing
 import { runNonTUICommand } from "../src/commands/plain/router.js";
+import { SETUPR_PACKAGE_NAME, SETUPR_VERSION } from "../src/version.js";
 
 const TEST_DIR = "/tmp/setupr-test-" + Date.now();
 
@@ -239,6 +240,8 @@ describe("plugin command", () => {
       const pluginDir = join(TEST_DIR, "setupr-plugin-team-tools");
       expect(existsSync(join(pluginDir, "package.json"))).toBe(true);
       expect(existsSync(join(pluginDir, "src", "index.ts"))).toBe(true);
+      const generated = JSON.parse(await readFile(join(pluginDir, "package.json"), "utf8"));
+      expect(generated.peerDependencies).toEqual({ [SETUPR_PACKAGE_NAME]: `^${SETUPR_VERSION.split(".")[0]}.0.0` });
 
       await runNonTUICommand("plugin", "validate", TEST_DIR, { args: [pluginDir] });
       expect(outputs.join("\n")).toContain("Manifest looks valid");
