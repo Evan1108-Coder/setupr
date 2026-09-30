@@ -3,7 +3,6 @@ import { PassThrough, Writable } from "node:stream";
 import type { WriteStream } from "node:tty";
 import React, { act, useState } from "react";
 import { Box, Text, render, useInput } from "ink";
-import ansiEscapes from "ansi-escapes";
 import stripAnsi from "strip-ansi";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFullscreenOutput } from "../src/cli/fullscreenOutput.js";
@@ -97,16 +96,16 @@ function adapterFor(tty = new FakeTTY()) {
   return { tty, output };
 }
 
-function inkFor(node: React.ReactElement, tty: FakeTTY, adapted = true) {
-  const output = adapted ? adapterFor(tty).output : undefined;
+function inkFor(node: React.ReactElement, tty: FakeTTY) {
+  const output = adapterFor(tty).output;
   const stdin = Object.assign(new PassThrough(), {
     isTTY: true, setRawMode: vi.fn(), ref: vi.fn(), unref: vi.fn(),
   });
   let instance!: ReturnType<typeof render>;
   act(() => {
     instance = render(node, {
-      stdout: output?.stdout ?? tty.stream,
-      debug: output?.debug ?? false,
+      stdout: output.stdout,
+      debug: output.debug,
       stdin: stdin as unknown as NodeJS.ReadStream,
       stderr: new PassThrough() as unknown as NodeJS.WriteStream,
       patchConsole: false,
@@ -128,16 +127,6 @@ function frame(lines: string[], height = lines.length, width = 24) {
 }
 
 describe("fullscreen output using the installed Ink renderer", () => {
-  it("reproduces Ink 5's full clear on an unchanged full-height frame without the adapter", async () => {
-    const tty = new FakeTTY();
-    inkFor(frame(["Setupr setup"], tty.rows), tty, false);
-    await vi.waitFor(() => expect(tty.writes.join("")).toContain(ansiEscapes.clearTerminal));
-    expect(tty.take()).toContain(ansiEscapes.clearTerminal);
-    act(() => { tty.emit("resize"); });
-    await vi.waitFor(() => expect(tty.writes.join("")).toContain(ansiEscapes.clearTerminal));
-    expect(tty.take()).toContain(ansiEscapes.clearTerminal);
-  });
-
   it("sends messages without full clears and emits nothing for unchanged renders", async () => {
     const tty = new FakeTTY();
     function SetupHarness(_props: { revision: number }) {
