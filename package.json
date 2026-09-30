@@ -5,12 +5,12 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Evan1108-Coder/Setupr.git"
+    "url": "git+https://github.com/Evan1108-Coder/setupr.git"
   },
   "bugs": {
-    "url": "https://github.com/Evan1108-Coder/Setupr/issues"
+    "url": "https://github.com/Evan1108-Coder/setupr/issues"
   },
-  "homepage": "https://github.com/Evan1108-Coder/Setupr#readme",
+  "homepage": "https://github.com/Evan1108-Coder/setupr#readme",
   "bin": {
     "setupr": "dist/setup.js",
     "setup": "dist/setup.js"
