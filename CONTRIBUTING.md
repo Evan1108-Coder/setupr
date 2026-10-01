@@ -94,7 +94,7 @@ See [Testing](docs/TESTING.md) for the fixture matrix, isolation rules, and veri
 
 ## Releasing to npm
 
-Setupr publishes `@evan-coder/setupr` from `.github/workflows/release.yml` using npm Trusted Publishing, not a long-lived access token. Before the first workflow release, the npm package owner must add a GitHub Actions trusted publisher for owner `Evan1108-Coder`, repository `setupr`, and workflow file `release.yml` in the package's npm settings. The npm repository name should match the spelling shown in GitHub's repository settings.
+Setupr publishes `@evan-coder/setupr` from `.github/workflows/release.yml` using npm Trusted Publishing, not a long-lived access token. Before the first workflow release, the npm package owner must add a GitHub Actions trusted publisher in the package's npm settings with organization/user `Evan1108-Coder`, repository `setupr`, and workflow filename `release.yml` (not the full path). Leave the optional environment blank because this workflow does not use one. Under allowed actions, enable direct `npm publish`; the workflow does not use staged publishing. Match capitalization exactly where the form requires it.
 
 1. Merge the intended source and version into `master`, then wait for CI to pass. The package version must be new on npm.
 2. Run `npm run typecheck`, `npm run lint`, `npm test`, and `npm run smoke:package` locally. Review `npm publish --dry-run` and the changelog.

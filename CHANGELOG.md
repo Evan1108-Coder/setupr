@@ -15,6 +15,7 @@ Some earlier version entries describe repository milestones that were not publis
 - Update checks, installation hints, and generated plugin peer dependencies now target the owned scoped npm package instead of the unrelated unscoped `setupr` package.
 - Dashboard and chat footers show the bundled Setupr version even when the CLI is run outside `npm run`.
 - `info` and `status` use the package manifest's project name consistently, falling back to the directory name.
+- Managed-process startup waits long enough to catch scripts that exit immediately even when npm startup is delayed by a busy machine.
 
 ### Release quality
 - Added a clean-install smoke test of the actual npm tarball, including its file allowlist and error behavior, plus CI coverage of the installed CLI on Node 18.
@@ -90,7 +91,9 @@ Some earlier version entries describe repository milestones that were not publis
 ### Docs
 - Documented the `--json` and `--cwd` global flags in `docs/COMMANDS.md`.
 
-## Unreleased
+## Additional 2.0.1 Development Notes
+
+The changes below are included in 2.0.1. They were recorded during development and are retained here for detail; they are not a separate unpublished release.
 
 - Add `--explain` for post-command AI explanations on stderr, preserving original output and exit status, with bounded requests and secret filtering. Credential/configuration commands never forward their output.
 - Render AI replies with Markdown headings, emphasis, lists, code, and word-aware wrapping; keep the transcript adjacent to the bottom input and animate pending requests.

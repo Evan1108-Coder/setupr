@@ -29,8 +29,8 @@ export interface ManagedProcess {
 }
 
 const PROCESS_FILE = "processes.json";
-const STARTUP_GRACE_MS = 1_000;
-const STARTUP_TIMEOUT_MS = 3_000;
+const STARTUP_GRACE_MS = 2_000;
+const STARTUP_TIMEOUT_MS = 5_000;
 
 export async function processRegistryPath(cwd: string): Promise<string> {
   return join(await ensureProjectStateDir(cwd), PROCESS_FILE);
