@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { chat, hasAIKey, type ChatMessage } from "./client.js";
 import type { ScanResult } from "../scanner/index.js";
 import { scanResultToDSL, type ProjectContext } from "./dsl.js";
@@ -67,7 +68,7 @@ Be practical and specific to the detected stack.`,
     if (!jsonMatch) throw new Error("No JSON array found");
     const steps = JSON.parse(jsonMatch[0]);
     return steps.map((s: any) => ({
-      id: s.id || crypto.randomUUID().slice(0, 8),
+      id: s.id || randomUUID().slice(0, 8),
       label: s.label,
       type: s.type || "script",
       command: s.command || undefined,

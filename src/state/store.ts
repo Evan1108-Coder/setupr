@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createStore } from "zustand/vanilla";
 import type { ScanResult } from "../scanner/index.js";
 import type { SetupStep } from "../ai/planner.js";
@@ -251,7 +252,7 @@ export function createAppStore(cwd: string) {
       set((state) => {
         const messages = [
           ...state.messages,
-          { ...msg, id: crypto.randomUUID().slice(0, 8), timestamp: Date.now() },
+          { ...msg, id: randomUUID().slice(0, 8), timestamp: Date.now() },
         ];
         return { messages: messages.length > 500 ? messages.slice(-500) : messages };
       }),
@@ -260,7 +261,7 @@ export function createAppStore(cwd: string) {
       set((state) => {
         const logs = [
           ...state.logs,
-          { ...entry, id: crypto.randomUUID().slice(0, 8), timestamp: Date.now() },
+          { ...entry, id: randomUUID().slice(0, 8), timestamp: Date.now() },
         ];
         return { logs: logs.length > 500 ? logs.slice(-500) : logs };
       }),
