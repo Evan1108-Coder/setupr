@@ -4,7 +4,7 @@ import { colors, icons, shortcuts } from "../theme.js";
 import { Panel } from "./Panel.js";
 
 export const MIN_TUI_WIDTH = 60;
-export const MIN_TUI_HEIGHT = 18;
+export const MIN_TUI_HEIGHT = 24;
 
 export function isTerminalTooSmall(width: number, height: number): boolean {
   return width < MIN_TUI_WIDTH || height < MIN_TUI_HEIGHT;

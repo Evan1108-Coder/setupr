@@ -38,6 +38,7 @@ export interface DirectorInput {
 export interface DirectorResult {
   handled: boolean;
   action: string;
+  failed?: boolean;
 }
 
 export async function handleDirectorInput(input: DirectorInput): Promise<DirectorResult> {
@@ -46,7 +47,7 @@ export async function handleDirectorInput(input: DirectorInput): Promise<Directo
   if (!text) return { handled: true, action: "empty" };
   const parsedIntent = parseUserIntent(text);
 
-  const modelResult = await maybeHandleModelIntent(input, text);
+  const modelResult = await maybeHandleModelIntent(input, text, parsedIntent);
   if (modelResult) return modelResult;
 
   const statusResult = maybeHandleStatusIntent(input, text);
@@ -79,17 +80,19 @@ export async function handleDirectorInput(input: DirectorInput): Promise<Directo
     level: result.level,
     cost: result.cost,
   });
-  return { handled: true, action: "answer" };
+  return { handled: true, action: "answer", failed: result.failed };
 }
 
-async function maybeHandleModelIntent(input: DirectorInput, text: string): Promise<DirectorResult | null> {
-  if (/\b(what|which|current).{0,24}\bmodel\b|\bmodel.{0,24}(using|active|current)\b/i.test(text)) {
+async function maybeHandleModelIntent(input: DirectorInput, text: string, intent: ParsedUserIntent): Promise<DirectorResult | null> {
+  if (/\b(?:what|which) (?:ai )?model (?:are you using|do you use|is active|is set)\b|\bcurrent (?:ai )?model\b|\bmodel\b.{0,24}\b(?:using|active|current)\b/i.test(text)) {
     input.store.getState().addMessage({
       role: "assistant",
       content: `Current AI model: ${describeDefaultModelSelection()}.`,
     });
     return { handled: true, action: "model.status" };
   }
+
+  if (intent.kind === "question") return null;
 
   if (/\b(use|switch|change|set).{0,24}\b(cheapest|lowest cost|least expensive)\b/i.test(text)) {
     const model = getCheapestAvailableModel();
@@ -201,9 +204,7 @@ async function maybeHandleEnvIntent(input: DirectorInput, text: string): Promise
 }
 
 function maybeHandlePlanIntent(input: DirectorInput, text: string, intent: ParsedUserIntent): DirectorResult | null {
-  const shouldSteer =
-    intent.kind === "plan" && intent.confidence !== "low" ||
-    /\b(skip|don'?t|dont|no|prefer|switch to|use)\b/i.test(text);
+  const shouldSteer = intent.kind === "plan" && intent.confidence !== "low";
   if (!shouldSteer) return null;
   if (/\bmodel\b/i.test(text)) return null;
 

@@ -71,6 +71,31 @@ describe("director conversation routing", () => {
     expect(mocks.intelligentResponse).not.toHaveBeenCalled();
   });
 
+  it("answers an informational script question without changing the build step", async () => {
+    const text = "Which scripts does this project provide? Name the build script only, without running it.";
+    const request = input(text);
+    expect((await handleDirectorInput(request)).action).toBe("answer");
+    expect(request.store.getState().steps.find((step) => step.id === "build")?.status).toBe("pending");
+    expect(mocks.intelligentResponse).toHaveBeenCalledWith(text, scan, "js/react/npm", expect.any(Object));
+  });
+
+  it.each(["Why no database?", "How do I use pnpm?", "Which model should I use?"])(
+    "does not treat an informational question as a command: %s", async (text) => {
+      const request = input(text);
+      const originalSteps = structuredClone(request.store.getState().steps);
+      expect((await handleDirectorInput(request)).action).toBe("answer");
+      expect(request.store.getState().steps).toEqual(originalSteps);
+      expect(mocks.intelligentResponse).toHaveBeenCalledWith(text, scan, "js/react/npm", expect.any(Object));
+    }
+  );
+
+  it("reports an unavailable provider as a failed answer", async () => {
+    const request = input();
+    mocks.intelligentResponse.mockResolvedValueOnce({ response: "AI unavailable: invalid key", level: "pattern", cost: 0, failed: true });
+    expect(await handleDirectorInput(request)).toMatchObject({ action: "answer", failed: true });
+    expect(request.store.getState().messages.at(-1)?.content).toContain("AI unavailable");
+  });
+
   it("leaves a pending prompt intact when answering a use question", async () => {
     const request = input("How do I use this project?");
     request.store.getState().setPendingPrompt({

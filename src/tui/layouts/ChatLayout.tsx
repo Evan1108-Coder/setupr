@@ -202,7 +202,7 @@ export function ChatLayout({ cwd, store, initialMessage, startNew = false }: Cha
           ...request,
         });
         request.signal.throwIfAborted();
-        const nextStatus = statusFromPromptOrRunning(store.getState().pendingPrompt, false, "idle");
+        const nextStatus = result.failed ? "failed" : statusFromPromptOrRunning(store.getState().pendingPrompt, false, "idle");
         store.getState().setRunning(false);
         setStatus(nextStatus);
         await persist(nextStatus, result.action);
@@ -437,18 +437,20 @@ function ConversationPanel({
 }
 
 function PlanPanel({ steps, focusState, height }: { steps: Array<{ id: string; label: string; status: string }>; focusState?: "focused" | "ancestor"; height: number }) {
+  const hasOverflow = steps.length > Math.max(0, height - 3);
+  const visibleCount = Math.max(0, height - (hasOverflow ? 4 : 3));
   return (
     <Panel title="PLAN" focusState={focusState} height={height}>
       {steps.length === 0 ? (
         <Text color={colors.textDim}>No active plan yet.</Text>
       ) : (
-        steps.slice(0, Math.max(1, height - 3)).map((step) => (
+        steps.slice(0, visibleCount).map((step) => (
           <Text key={step.id} color={stepColor(step.status)} wrap="truncate">
             {stepIcon(step.status)} {step.label}
           </Text>
         ))
       )}
-      {steps.length > height - 3 && <Text color={colors.textDim}>… {steps.length - (height - 3)} more</Text>}
+      {hasOverflow && <Text color={colors.textDim}>… {steps.length - visibleCount} more</Text>}
     </Panel>
   );
 }

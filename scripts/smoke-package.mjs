@@ -91,6 +91,21 @@ try {
   assert.match(cli("info", "--plain").stdout, /fresh-project/);
   const status = JSON.parse(cli("status", "--plain", "--json").stdout);
   assert.equal(status.projectName, "fresh-project");
+  mkdirSync(join(fixture, "node_modules"));
+  const rejectedClean = run(process.execPath, [executable, "clean", "deps", "--plain", "--force", "--dry-run"], { cwd: fixture, code: 1 });
+  assert.match(rejectedClean.stdout + rejectedClean.stderr, /INVALID_FLAG/);
+  assert.ok(existsSync(join(fixture, "node_modules")), "Rejected dry-run deleted dependencies");
+  const rejectedSetup = run(process.execPath, [executable, "setup", "--plain", "--force", "--dry-run"], { cwd: fixture, code: 1 });
+  assert.match(rejectedSetup.stdout + rejectedSetup.stderr, /INVALID_FLAG/);
+  assert.ok(!existsSync(join(fixture, "package-lock.json")), "Rejected dry-run ran setup");
+  console.log("PASS unsupported dry-run is rejected before setup or clean can mutate files");
+  const offlineChat = run(process.execPath, [executable, "chat", "--plain", "--json", "Explain the architecture tradeoffs of this project"], { cwd: fixture, code: 1 });
+  const unavailable = JSON.parse(offlineChat.stdout);
+  assert.equal(unavailable.failed, true);
+  assert.match(unavailable.text, /API key/i);
+  const missingLogs = run(process.execPath, [executable, "logs", "--plain"], { cwd: fixture, code: 1 });
+  assert.match(missingLogs.stdout + missingLogs.stderr, /LOG_FILE_MISSING/);
+  console.log("PASS unavailable AI and missing logs fail clearly in the installed CLI");
   console.log("PASS installed CLI version, help, info, and JSON status");
 
   writeFileSync(join(fixture, "package.json"), "{broken json");

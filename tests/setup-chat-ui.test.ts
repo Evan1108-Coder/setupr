@@ -90,13 +90,14 @@ describe("setup chat in the full layout", () => {
     const { store, ui } = setup();
     act(() => store.getState().addMessage({ role: "assistant", content: "Answer details\n".repeat(80) + "Final answer line" }));
     ui.write("draft ".repeat(100));
-    for (const [width, height] of [[140, 40], [80, 24], [60, 18], [200, 60], [100, 30]]) {
+    for (const [width, height] of [[140, 40], [80, 24], [60, 18], [60, 24], [200, 60], [100, 30]]) {
       terminal.width = width;
       terminal.height = height;
       ui.rerender(React.createElement(SetupLayout, { store }));
       const lines = stripAnsi(ui.lastFrame() || "").split("\n");
       expect(lines, `${width}x${height} height`).toHaveLength(height);
       expect(lines.every((line) => stringWidth(line) <= width), `${width}x${height} width`).toBe(true);
+      if (height < 24) expect(ui.lastFrame()).toContain("RESIZE TERMINAL");
     }
   });
 

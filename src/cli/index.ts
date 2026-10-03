@@ -415,6 +415,17 @@ function validateCliRequest(command: string, subCommand: string | undefined, cwd
     }));
     return false;
   }
+  if (cli.flags.dryRun) {
+    printPlainError(createSetuprError({
+      code: "INVALID_FLAG",
+      command,
+      subcommand: subCommand,
+      cwd,
+      details: ["--dry-run is not implemented for Setupr commands. No command was run."],
+      nextSteps: ["Remove --dry-run to proceed, or use a command's documented preview/check mode."],
+    }));
+    return false;
+  }
 
   const noSubcommand = noSubcommandNames();
   if (subCommand && noSubcommand.has(command)) {

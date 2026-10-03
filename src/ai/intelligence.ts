@@ -15,6 +15,7 @@ export interface IntelligenceResult {
   response: string;
   level: IntelligenceLevel;
   cost: number;
+  failed?: boolean;
 }
 
 export interface IntelligenceOptions {
@@ -60,8 +61,15 @@ const PATTERN_RULES: Array<{
     },
   },
   {
-    match: (q) => /what scripts/i.test(q),
-    respond: (_, scan) => {
+    match: (q) => /\b(?:what|which) scripts\b|\b(?:what|which) (?:is|are) (?:the )?(?:build|test|dev|start) script\b/i.test(q),
+    respond: (query, scan) => {
+      const requested = query.match(/\b(build|test|dev|start) script(?: only)?\b/i)?.[1]?.toLowerCase();
+      if (requested) {
+        const script = scan.scripts[requested];
+        return script
+          ? `${requested} script: ${scan.packageManager || "npm"} run ${requested} (${script})`
+          : `No ${requested} script found.`;
+      }
       const scripts = Object.keys(scan.scripts);
       if (!scripts.length) return "No scripts found.";
       return `Available scripts:\n${scripts.map((s) => `  • ${s}: ${scan.scripts[s]}`).join("\n")}`;
@@ -123,13 +131,14 @@ export async function intelligentResponse(
       response: "AI features require an API key. Run setupr auth login or setupr auth set-key <provider>. Shell environment keys still work for temporary use.",
       level: "pattern",
       cost: 0,
+      failed: true,
     };
   }
   const config = await loadConfig();
   options.signal?.throwIfAborted();
   if (!config.ai.enabled) return {
     response: "AI is disabled in your preferences. Run setupr config set ai true to enable live answers.",
-    level: "pattern", cost: 0,
+    level: "pattern", cost: 0, failed: true,
   };
 
   const systemMsg: ChatMessage = {
@@ -204,6 +213,7 @@ export async function intelligentResponse(
       response: sanitizeForAI(`AI unavailable: ${errorSummary(setuprError)} ${setuprError.nextSteps?.join(" ") || ""}`),
       level: "pattern",
       cost: 0,
+      failed: true,
     };
   } finally {
     clearTimeout(timer);

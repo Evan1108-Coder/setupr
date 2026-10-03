@@ -66,7 +66,7 @@ export const ERROR_CATALOG: Record<SetuprErrorCode, Template> = {
   CLEAN_MODE_INVALID: usage("Invalid clean mode", "Clean mode must be deps, share, or all.", ["Run setupr clean --deps, setupr clean --share, or setupr clean --all."]),
   PORT_CHECK_FAILED: executor("Port check failed", "Setupr could not inspect the requested port.", ["Check platform tools such as lsof/netstat."]),
   LOCK_STATE_MISSING: info("config", "No locked state found", "There is no saved environment lock to compare against.", ["Run setup lock first."]),
-  LOG_FILE_MISSING: info("filesystem", "No log file found", "Setupr could not find a known package-manager or Setupr log file in this project.", ["Run the failing command again, or check package-manager logs manually."]),
+  LOG_FILE_MISSING: fs("No log file found", "Setupr could not find a known package-manager or Setupr log file in this project.", ["Run the failing command again, or check package-manager logs manually."]),
   OPEN_TARGET_MISSING: project("Open target missing", "Setupr could not find the requested URL, remote, or local app target.", ["Check project metadata and rerun."]),
 
   TUI_TERMINAL_TOO_SMALL: tui("Terminal too small", "The current terminal is too small to render the full TUI.", ["Resize the terminal or run with --plain."]),

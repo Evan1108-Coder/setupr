@@ -54,6 +54,7 @@ export function parseUserIntent(input: string): ParsedUserIntent {
   const raw = input.trim();
   const sanitizedRaw = sanitizeForAI(raw);
   const normalizedText = normalizeUserText(raw);
+  const informationalQuestion = /^(?:what|which|why|how|where|when|is|are|does)\b|^do (?:you|i|we|they)\b/i.test(normalizedText);
   const env = interpretEnvBatch(raw);
   const envKeys = env.vars.map((item) => item.key);
   if (envKeys.length > 0) {
@@ -66,6 +67,14 @@ export function parseUserIntent(input: string): ParsedUserIntent {
       confidence: "high",
       reason: "Detected KEY=value environment assignments.",
       envKeys,
+    });
+  }
+
+  if (informationalQuestion) {
+    return buildIntent({
+      raw, sanitizedRaw, normalizedText,
+      kind: "question", confidence: "high",
+      reason: "Detected an informational question; quoted constraints are not plan changes.",
     });
   }
 

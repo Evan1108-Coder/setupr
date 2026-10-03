@@ -74,6 +74,8 @@ long reply scrolling, usable transcript space at 80x24, and full-height Ink outp
 controlled fixtures, not paid live API calls. The repaint checks exercise the installed Ink renderer
 and terminal control sequences; they do not establish native-terminal font or compositor behavior.
 
+Dense TUIs require at least 60 columns and 24 rows; smaller terminals show a resize notice rather than squeezing panels and inputs together. Unsupported `setupr --dry-run` combinations are rejected before execution. The package smoke test checks this against a fresh install of the packed CLI.
+
 Ink is pinned to 5.2.1 because the safe keyboard adapter resolves its installed parser and React
 batching implementation. Before upgrading Ink, run the safe keyboard hook and fresh-process
 runtime test along with the full-screen output tests; these internal APIs are not an upgrade contract.

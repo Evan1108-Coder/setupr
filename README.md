@@ -113,6 +113,8 @@ setupr test quick
 
 Use `setupr setup` when you want Setupr to actually run setup steps. Use `--plain` for CI, SSH, or terminals where you do not want the TUI.
 
+Setupr does not implement a general `--dry-run` flag. It rejects that flag before running a command, including setup and clean. Use a command's documented check/preview mode when available; `npm pack --dry-run` is an npm command, not a Setupr safety switch.
+
 ## 30-second Example
 
 ```bash
@@ -488,7 +490,6 @@ See [docs/COMMANDS.md](docs/COMMANDS.md) for the complete reference, including e
 | `--tui` | Prefer a rich TUI when the command has one |
 | `--smart` | Use AI assistance where the command supports it |
 | `--force` | Skip ordinary prompts; install what the project specifies; **never** bypasses critical blockers |
-| `--dry-run` | Preview changes without writing, where supported |
 | `--yes` | Accept ordinary confirmations, where supported |
 | `--fix` | Apply safe fixes, where supported |
 | `--watch` | Keep watching and updating, where supported |

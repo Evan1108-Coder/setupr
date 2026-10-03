@@ -46,12 +46,14 @@ describe("plain command structured errors", () => {
     expect(output()).toContain("No build script found");
   });
 
-  it("reports missing lock state and log files without failing the process", async () => {
+  it("keeps missing lock state informational but fails an explicit missing log request", async () => {
     await runNonTUICommand("diff", undefined, tempDir, {});
+    expect(process.exitCode).toBeUndefined();
     await runNonTUICommand("logs", undefined, tempDir, {});
 
     expect(output()).toContain("LOCK_STATE_MISSING");
     expect(output()).toContain("LOG_FILE_MISSING");
+    expect(process.exitCode).toBe(1);
   });
 
   it("asks for a package name (not an 'unknown subcommand') when add/remove get no argument", async () => {

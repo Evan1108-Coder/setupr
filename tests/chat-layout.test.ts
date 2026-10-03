@@ -29,14 +29,19 @@ describe("real chat layout state", () => {
     expect(store.getState().isRunning).toBe(false);
     expect(store.getState().messages.at(-1)?.content).toContain("No request is running");
     expect(store.getState().envVars.find(v=>v.key==='PORT')?.value).toBe('4000');
-    for(const [width,height] of [[140,40],[80,24],[60,18],[200,60],[80,24]]) {
+    for(const [width,height] of [[140,40],[80,24],[60,18],[60,24],[200,60],[80,24]]) {
       terminal.width=width;terminal.height=height;
       ui.rerender(React.createElement(ChatLayout,{cwd,store}));await flushTui();
       const frame=ui.lastFrame()!;
       expect(frame.split("\n").length).toBeLessThanOrEqual(height);
       expect(frame.split("\n").every(line=>stringWidth(line)<=width)).toBe(true);
-      expect(frame).toContain("SESSION");
-      expect(frame).toContain("PLAN");
+      if (height < 24) {
+        expect(frame).toContain("RESIZE TERMINAL");
+        expect(frame).not.toContain("SESSION");
+      } else {
+        expect(frame).toContain("SESSION");
+        expect(frame).toContain("PLAN");
+      }
       if (width === 140) expect(frame).toContain(`v${packageInfo.version}`);
       expect(frame).not.toContain("AI is working");
     }

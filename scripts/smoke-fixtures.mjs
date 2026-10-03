@@ -158,7 +158,7 @@ function plainSmoke() {
   expectRun("forced non-tty tui", "js-new", ["status", "--tui"], ["TUI_RENDER_FAILED", "--tui was requested"]);
 	  expectRun("monorepo info", "monorepo", ["info", "--plain"], ["Monorepo:", "npm-workspaces"]);
   expectRun("missing lock/log/repo", "env-missing", ["diff", "--plain"], ["LOCK_STATE_MISSING"]);
-  expectRun("missing logs", "env-missing", ["logs", "--plain"], ["LOG_FILE_MISSING"]);
+  expectRun("missing logs", "env-missing", ["logs", "--plain"], ["LOG_FILE_MISSING"], { expectedExitCode: 1 });
   expectRun("missing remote", "env-missing", ["open", "repo", "--plain"], ["OPEN_TARGET_MISSING"]);
   expectRun("new command ci", "js-new", ["ci", "github", "--plain"], ["Generated github CI config"]);
   expectRun("new command docker", "js-new", ["docker", "generate", "--plain", "--force"], ["Dockerfile", "Docker files generated"]);

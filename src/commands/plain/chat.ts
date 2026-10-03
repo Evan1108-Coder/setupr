@@ -17,6 +17,7 @@ export interface ChatAnswer {
   action: string;
   level?: string;
   cost?: number;
+  failed?: boolean;
 }
 
 export async function cmdChat(first: string | undefined, cwd: string, flags: ChatFlags = {}): Promise<void> {
@@ -36,6 +37,7 @@ export async function cmdChat(first: string | undefined, cwd: string, flags: Cha
   }
 
   const answer = await askProjectChat(cwd, text, flags);
+  if (answer.failed) process.exitCode = 1;
   if (flags.json) {
     console.log(JSON.stringify(answer, null, 2));
     return;
@@ -89,7 +91,8 @@ export async function askProjectChat(cwd: string, text: string, flags: ChatFlags
   });
 
   const messages = store.getState().messages;
-  const last = [...messages].reverse().find((message) => message.role === "assistant" || message.role === "thinking");
+  const last = [...messages].reverse().find((message) => message.role === "assistant")
+    ?? [...messages].reverse().find((message) => message.role === "thinking");
   const textOut = last?.content || "I did not produce a response.";
   await engine.log("chat.user", text, { action: result.action });
   await engine.log("chat.assistant", textOut, {
@@ -102,6 +105,7 @@ export async function askProjectChat(cwd: string, text: string, flags: ChatFlags
     action: result.action,
     level: last?.level,
     cost: last?.cost,
+    failed: result.failed,
   };
 }
 

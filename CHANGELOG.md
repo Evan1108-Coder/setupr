@@ -4,6 +4,18 @@ All notable changes to Setupr will be documented in this file. Setupr keeps a ch
 
 Some earlier version entries describe repository milestones that were not published separately to npm. Check the npm version badge in the README for the current installable release.
 
+## 2.0.2
+
+### Fixed
+- Reject `--dry-run` before any Setupr command executes. No Setupr command implements this flag yet; previously setup and clean could make real changes while silently ignoring it.
+- Keep informational questions out of plan steering when they mention constraints such as "without running it."
+- Return a failing status for one-shot chat when an AI provider is unavailable, while keeping the explanation visible and allowing TUI chat to retry.
+- Return a failing status when `setupr logs` is explicitly requested but no log exists.
+- Show a resize notice below 60x24 terminal cells instead of overdrawn dense TUI panels, and reserve space for a plan overflow summary.
+
+### Validation
+- Added installed-package regression checks for rejected dry runs and focused chat, error, and terminal layout tests.
+
 ## 2.0.1
 
 ### Changed

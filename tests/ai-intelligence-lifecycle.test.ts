@@ -134,7 +134,7 @@ describe("conversational provider lifecycle", () => {
     expect(mocks.chat.mock.calls.map(([, options]) => options?.model))
       .toEqual(["selected-model", "gpt-4o-mini", "gpt-4o"]);
     expect(mocks.chat.mock.calls.every(([, options]) => options?.maxRetries === 0)).toBe(true);
-    expect(result).toMatchObject({ level: "pattern", cost: 0 });
+    expect(result).toMatchObject({ level: "pattern", cost: 0, failed: true });
     expect(result.response).toContain("AI unavailable:");
     expect(onProgress).toHaveBeenCalledWith("Trying fallback gpt-4o-mini");
     expect(onProgress).toHaveBeenCalledWith("Trying fallback gpt-4o");
@@ -164,7 +164,7 @@ describe("conversational provider lifecycle", () => {
   it.each(["401 invalid API key", "Invalid response: no answer"])(
     "does not fan out after a non-retryable failure: %s", async (message) => {
       mocks.chat.mockRejectedValue(new Error(message));
-      expect((await request()).response).toContain("AI unavailable:");
+      expect(await request()).toMatchObject({ response: expect.stringContaining("AI unavailable:"), failed: true });
       expect(mocks.chat).toHaveBeenCalledTimes(1);
       expect(mocks.setCache).not.toHaveBeenCalled();
     }

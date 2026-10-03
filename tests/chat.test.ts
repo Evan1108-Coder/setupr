@@ -22,7 +22,7 @@ describe("setupr chat", () => {
       }
     }
     await writeFile(join(tempDir, "package.json"), JSON.stringify({
-      scripts: { dev: "vite --host 0.0.0.0", test: "vitest" },
+      scripts: { dev: "vite --host 0.0.0.0", build: "vite build", test: "vitest" },
       dependencies: { react: "^18.0.0" },
       devDependencies: { vite: "^5.0.0" },
     }, null, 2));
@@ -42,6 +42,15 @@ describe("setupr chat", () => {
     expect(answer.action).toBe("answer");
     expect(answer.text).toContain("JavaScript");
     expect(answer.level).toBe("pattern");
+  });
+
+  it("answers a constrained build-script question without steering or contacting AI", async () => {
+    const answer = await askProjectChat(tempDir, "Which scripts does this project provide? Name the build script only, without running it.");
+    expect(answer.action).toBe("answer");
+    expect(answer.level).toBe("pattern");
+    expect(answer.failed).toBeUndefined();
+    expect(answer.text).toContain("npm run build");
+    expect(answer.text).not.toContain("skip");
   });
 
   it("can steer model choice from plain chat", async () => {
